@@ -122,7 +122,7 @@ from agents_store import AgentsStore  # noqa: E402
 _enable_api_docs = os.getenv("ENABLE_API_DOCS", "true").lower() in ("1", "true", "yes")
 
 app = FastAPI(
-    title="Asterisk AI Voice Agent Admin API",
+    title="Digital Nepal AI Call Admin API",
     description="""
 REST API for managing the Asterisk AI Voice Agent system.
 

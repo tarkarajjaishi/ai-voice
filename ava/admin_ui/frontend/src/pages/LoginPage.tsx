@@ -34,14 +34,14 @@ const LoginPage: React.FC = () => {
                 <div className="text-center">
                     <div className="flex items-center justify-center mb-4">
                         <img
-                            src="/mascot_transparent.png"
-                            alt="AVA Mascot"
-                            className="w-24 h-auto relative z-10 -mr-6"
+                            src="/dn-logo.svg"
+                            alt="Digital Nepal"
+                            className="w-16 h-16 rounded-xl relative z-10 mr-4"
                         />
-                        <h2 className="text-3xl font-bold text-foreground relative z-0">Asterisk AI Voice Agent</h2>
+                        <h2 className="text-3xl font-bold text-foreground relative z-0">Digital Nepal AI Call</h2>
                     </div>
                     <p className="mt-2 text-sm text-muted-foreground">
-                        Sign in to manage your AI Voice Agent
+                        Sign in to manage your AI Call System
                     </p>
                 </div>
 

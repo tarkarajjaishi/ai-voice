@@ -70,13 +70,13 @@ const Sidebar = () => {
             <div className="p-6 border-b border-border/50">
                 <div className="flex items-center gap-3 font-bold text-xl tracking-tight">
                     <img
-                        src="/mascot_transparent.png"
-                        alt="AVA Mascot"
-                        className="w-11 h-11 object-contain"
+                        src="/dn-logo.svg"
+                        alt="Digital Nepal"
+                        className="w-11 h-11 object-contain rounded-lg"
                     />
                     <div className="flex flex-col leading-none">
-                        <span>AVA</span>
-                        <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mt-1">AI Voice Agent for Asterisk</span>
+                        <span>Digital Nepal</span>
+                        <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mt-1">AI Call System</span>
                     </div>
                 </div>
             </div>

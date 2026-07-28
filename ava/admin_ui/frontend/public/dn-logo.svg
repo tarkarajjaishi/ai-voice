@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Digital Nepal">
+  <title>Digital Nepal</title>
+  <rect width="512" height="512" rx="64" fill="#2C7BBE"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="38" stroke-linecap="round" stroke-linejoin="round">
+    <!-- d : bowl closed on the right by the ascender -->
+    <path d="M216 256 H110 A46 46 0 0 0 64 302 V344 A46 46 0 0 0 110 390 H216"/>
+    <path d="M216 132 V390"/>
+    <!-- n : arch on two legs -->
+    <path d="M278 390 V318 A75 75 0 0 1 428 318 V390"/>
+  </g>
+</svg>

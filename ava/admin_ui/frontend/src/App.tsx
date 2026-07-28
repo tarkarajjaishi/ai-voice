@@ -118,7 +118,7 @@ const SetupGuard = ({ children }: { children: React.ReactNode }) => {
             <div className="min-h-screen flex items-center justify-center flex-col gap-4 px-6 text-center">
                 <h1 className="text-xl font-semibold">Backend unavailable</h1>
                 <p className="text-muted-foreground text-sm max-w-md">
-                    {error} The admin UI cannot load until the AVA backend is running and reachable.
+                    {error} The admin UI cannot load until the Digital Nepal AI Call backend is running and reachable.
                     Check that the service is up, then retry.
                 </p>
                 <button
