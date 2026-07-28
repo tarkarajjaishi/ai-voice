@@ -1,0 +1,71 @@
+# Operator overrides — deep-merged over ai-agent.yaml at startup.
+#
+# The free Nepali stack:
+#   STT : faster-whisper (Vosk has no Nepali model at all)
+#   LLM : the ERP's own agent, over the OpenAI-compatible shim
+#   TTS : Piper ne_NP-chitwan
+#
+# Nothing here costs money and nothing leaves the box except the LLM hop to Django.
+
+active_pipeline: erp_nepali
+default_provider: erp_nepali
+
+providers:
+  # ai-agent.yaml pins stt_backend: vosk in YAML, which beats LOCAL_STT_BACKEND
+  # from .env — so it has to be overridden here as well.
+  local_stt:
+    stt_backend: faster_whisper
+    stt_model: small
+
+  local_tts:
+    tts_voice: models/tts/ne_NP-chitwan-medium.onnx
+
+  # This is NOT Telnyx — it is our Django ERP agent behind an OpenAI-compatible
+  # shim. It MUST be named "telnyx_llm" regardless: orchestrator.py hydrates the
+  # adapter with providers.get("telnyx_llm") and registers the factory under that
+  # literal key, so a provider named anything else silently resolves to a
+  # placeholder adapter and the pipeline is rejected. `type: telnyx` alone is not
+  # enough. (The api.telnyx.com host check is only a fallback for unnamed
+  # providers, and chat_base_url is applied with setdefault — so pointing this at
+  # our own host is supported.)
+  telnyx_llm:
+    enabled: true
+    type: telnyx
+    capabilities:
+      - llm
+    chat_base_url: http://127.0.0.1:8009/api/ai/v1
+    api_key: ${DN_VOICE_TOKEN:-dev-voice-token}
+    chat_model: erp/agent
+    temperature: 0
+    response_timeout_sec: 20
+
+pipelines:
+  erp_nepali:
+    stt: local_stt
+    llm: telnyx_llm
+    tts: local_tts
+    tools: null
+    options:
+      llm:
+        chat_base_url: http://127.0.0.1:8009/api/ai/v1
+        model: erp/agent
+        temperature: 0
+        max_tokens: 200
+      stt:
+        ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+        chunk_ms: 160
+        mode: stt
+        stream_format: pcm16_16k
+        streaming: true
+      tts:
+        ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+        mode: tts
+        response_timeout_sec: 30
+        # Telephony audio: 8 kHz mulaw is what Asterisk wants on the wire.
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+
+llm:
+  initial_greeting: "नमस्ते! Digital Nepal AI Call मा स्वागत छ। म तपाईंलाई कसरी मद्दत गर्न सक्छु?"
+  prompt: "Answer only from the institution's knowledge base. Reply in the caller's language — Nepali or English. Keep replies under 40 words."

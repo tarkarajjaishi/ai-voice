@@ -65,7 +65,8 @@ RUN if [ "$INCLUDE_FASTER_WHISPER" = "true" ]; then \
         echo "📦 Installing Faster-Whisper STT..." && \
         FASTER_WHISPER_REQUIREMENT="$(grep -m 1 '^faster-whisper==' requirements.txt || true)"; \
         if [ -z "$FASTER_WHISPER_REQUIREMENT" ]; then echo "❌ Missing faster-whisper pin" >&2; exit 1; fi; \
-        pip install --no-cache-dir "$FASTER_WHISPER_REQUIREMENT"; \
+        pip install --no-cache-dir "$FASTER_WHISPER_REQUIREMENT" requests; \
+        python -c "import faster_whisper" || { echo "❌ faster-whisper installed but not importable" >&2; exit 1; }; \
     fi
 
 RUN if [ "$INCLUDE_WHISPER_CPP" = "true" ]; then \
