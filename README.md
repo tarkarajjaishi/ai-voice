@@ -61,6 +61,27 @@ Two gotchas worth knowing:
   buildx refuses without `--allow=network.host`. Without it, `docker compose up --build`
   **exits 0 having built nothing** — the only tell is an empty `docker ps`.
 
+## Deploying to the on-prem box
+
+One script takes a fresh Ubuntu/Debian machine to a working trunk:
+
+```bash
+sudo ./asterisk/deploy-onprem.sh --check                     # verify only, changes nothing
+sudo ./asterisk/deploy-onprem.sh \
+     --erp-url http://<erp-host>:8009/api/ai/v1 \
+     --erp-token '<DN_VOICE_TOKEN>' \
+     --did <your Ncell DID>
+```
+
+It installs Asterisk, builds the G.729 codec, deploys the trunk config and dialplan,
+downloads the Nepali Piper voice, brings up AVA, and verifies the trunk end to end.
+Idempotent — re-run it freely.
+
+**It will not configure VLAN 3030 for you.** Reconfiguring networking over SSH is how
+boxes get lost, so it prints the netplan you need and stops. Ncell authenticates by
+source IP, so the machine must hold `10.111.7.76` on that VLAN before anything else
+matters — that check is the first thing the script does.
+
 ## Known constraints
 
 - **G729 only** on the Ncell trunk — the worst codec for ASR, and it stacks badly on code-switched
