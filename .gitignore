@@ -1,0 +1,27 @@
+# Secrets — .env holds the JWT_SECRET and every provider API key. Never commit it.
+.env
+.env.local
+**/secrets/**
+!**/secrets/.gitkeep
+config/.first-run-password
+config/ai-agent.local.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# Downloaded model weights — large and re-fetchable
+models/*.onnx
+models/*.bin
+models/*.gguf
+
+# Runtime call data / recordings
+asterisk_media/
+data/calls/
+*.log

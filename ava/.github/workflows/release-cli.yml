@@ -1,0 +1,158 @@
+name: Release CLI Binaries
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Trigger on version tags (v4.1.0, v4.1.1, etc.)
+      - '[0-9]*.[0-9]*.[0-9]*'  # Also allow tags without the v-prefix (4.1.0)
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write  # Required for creating releases
+
+jobs:
+  build:
+    name: Build and Release CLI Binaries
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # Fetch all history for git describe
+          persist-credentials: false
+      
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.22'
+          cache: false
+      
+      - name: Download Go dependencies
+        run: |
+          cd cli
+          go mod download
+          go mod verify
+      
+      - name: Get version from tag
+        id: get_version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION=$(git describe --tags --always --dirty)
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+      
+      - name: Build all platform binaries
+        env:
+          VERSION: ${{ steps.get_version.outputs.version }}
+        run: make cli-build-all
+      
+      - name: Generate checksums
+        run: make cli-checksums
+      
+      - name: Test Linux binary
+        run: |
+          chmod +x bin/agent-linux-amd64
+          ./bin/agent-linux-amd64 version
+      
+      - name: Create release tarball
+        run: |
+          mkdir -p release
+          cp bin/agent-* release/
+          cp bin/SHA256SUMS release/
+          tar -czf asterisk-ai-agent-cli-${{ steps.get_version.outputs.version }}.tar.gz -C release .
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-binaries-${{ steps.get_version.outputs.version }}
+          path: |
+            bin/agent-*
+            bin/SHA256SUMS
+          retention-days: 30
+      
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            bin/agent-linux-amd64
+            bin/agent-linux-arm64
+            bin/agent-darwin-amd64
+            bin/agent-darwin-arm64
+            bin/agent-windows-amd64.exe
+            bin/SHA256SUMS
+            asterisk-ai-agent-cli-${{ steps.get_version.outputs.version }}.tar.gz
+          body: |
+            ## Asterisk AI Voice Agent ${{ steps.get_version.outputs.version }}
+
+            Application release notes and operator guidance:
+
+            - [Release changelog](https://github.com/${{ github.repository }}/blob/${{ steps.get_version.outputs.version }}/CHANGELOG.md)
+            - [Installation and upgrade guide](https://github.com/${{ github.repository }}/blob/main/docs/INSTALLATION.md)
+            - [Migration guide](https://github.com/${{ github.repository }}/blob/main/docs/MIGRATION.md)
+
+            ### Agent CLI Tools
+            
+            Pre-built binaries for the agent CLI tools.
+            
+            ### Installation
+            
+            **Linux/macOS:**
+            ```bash
+            # Download for your platform
+            curl -L -o agent https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/agent-linux-amd64
+            chmod +x agent
+            sudo mv agent /usr/local/bin/
+            agent version
+            ```
+            
+            **Windows:**
+            Download `agent-windows-amd64.exe` and add to your PATH.
+            
+            ### Available Binaries
+            
+            - `agent-linux-amd64` - Linux x86_64
+            - `agent-linux-arm64` - Linux ARM64 (Raspberry Pi, AWS Graviton)
+            - `agent-darwin-amd64` - macOS Intel
+            - `agent-darwin-arm64` - macOS Apple Silicon (M1/M2/M3)
+            - `agent-windows-amd64.exe` - Windows x86_64
+            
+            ### Verification
+            
+            Verify checksums with `SHA256SUMS`:
+            ```bash
+            sha256sum -c SHA256SUMS
+            ```
+            
+            ### Tools Included
+            
+            - `agent setup` - Interactive setup wizard
+            - `agent check` - Standard diagnostics report
+            - `agent rca` - Post-call root cause analysis
+            - `agent version` - Version information
+            
+            See [TROUBLESHOOTING_GUIDE.md](https://github.com/${{ github.repository }}/blob/main/docs/TROUBLESHOOTING_GUIDE.md) for complete documentation.
+          draft: false
+          prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Build summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Binaries Built:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -lh bin/agent-* >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Checksums:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat bin/SHA256SUMS >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

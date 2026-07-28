@@ -1,0 +1,130 @@
+# Developer Documentation
+
+Welcome to Asterisk AI Voice Agent development! This directory contains everything you need to contribute features, fix bugs, and extend the project.
+
+## 🚀 Getting Started
+
+**New to the project?** Choose your path:
+
+### For Operators (No Coding Required)
+1. Clone the repo and open it in your AI coding assistant (Claude, Cursor, Windsurf, Codex, Copilot, …)
+2. Load [AVA.mdc](../../AVA.mdc) as context — it carries the project map, guardrails, and PR workflow
+3. Tell your assistant what you want to contribute
+
+### For Developers
+1. **[Quick Start Guide](quickstart.md)** - Set up your dev environment in 15 minutes
+2. **[Architecture Overview](architecture-quickstart.md)** - Understand the system (10-minute read)
+3. **[Common Pitfalls](COMMON_PITFALLS.md)** - Avoid these mistakes
+
+## 🔧 Development Guides
+
+### Core Development
+
+- **[Tool Development](tool-development.md)** - Create telephony/business tools and pre/in/post-call hooks (hangup, transfer, email, CRM lookups, webhooks)
+- **[Provider Development](provider-development.md)** - Add full-agent providers and STT/LLM/TTS adapters
+- **[Pipeline Development](pipeline-development.md)** - Build custom audio processing pipelines
+
+### Testing & Quality
+
+- **[Testing Guide](testing-guide.md)** - Test your changes with real calls
+- **[Testing From Source](testing-from-source.md)** - Run the stack from a source checkout
+- **[Debugging Guide](debugging-guide.md)** - Debug with logs, RCA scripts, and agent CLI
+- **[Code Style](code-style.md)** - Project conventions and best practices
+- **[Pull Request and CI Workflow](PULL_REQUEST_WORKFLOW.md)** - Draft checkpoints, bot reviews, final CI, and merge gates
+
+### Technical Deep Dives
+
+- **[Architecture Deep Dive](architecture-deep-dive.md)** - Complete technical architecture
+- **[Schema Reference](schema-reference.md)** - Tool schema formats by provider
+- **[API Reference](api-reference.md)** - Core API documentation
+
+## 📚 References
+
+### Provider Implementation Details
+
+Technical specs for each provider:
+
+- **[Provider-Google-Implementation.md](references/Provider-Google-Implementation.md)** - Google Live API internals
+- **[Provider-Deepgram-Implementation.md](references/Provider-Deepgram-Implementation.md)** - Deepgram Voice Agent internals
+- **[Provider-OpenAI-Implementation.md](references/Provider-OpenAI-Implementation.md)** - OpenAI Realtime API internals
+
+### Case Studies
+
+- **[Local Hybrid Pipeline Implementation](references/Pipeline-Local_Hybrid-Implementation.md)** - Tool execution for pipelines (real-world example)
+- **[Team Setup Guide](references/team-setup.md)** - Linear MCP integration
+
+### Development History
+
+- **[Milestones](milestones/)** - Major features and architectural decisions
+
+## 🧪 Code Examples
+
+- **[Tool Examples](../../examples/)** - Creating custom tools
+- **[Provider Examples](../../examples/)** - Implementing custom providers
+- **[Testing Examples](../../tests/README.md)** - Integration/unit test patterns
+
+## 🛠️ Tools & Workflows
+
+### Development Workflow
+
+1. Fork and clone the repository
+2. Create a feature branch from the latest `main` (one branch per PR)
+3. Make changes following our code style
+4. Test with real calls using `agent rca`
+5. Submit a draft PR with testing evidence and follow the [review and CI workflow](PULL_REQUEST_WORKFLOW.md)
+
+### Using Agent CLI
+
+```bash
+agent check           # Standard diagnostics report
+agent rca             # Post-call root cause analysis (most recent call)
+agent setup           # Interactive setup wizard (if needed)
+agent update          # Pull latest code + apply updates
+```
+
+See [cli/README.md](../../cli/README.md) for complete CLI reference.
+
+### Using RCA Scripts
+
+```bash
+./scripts/rca_collect.sh              # Collect full diagnostic bundle
+./scripts/analyze_logs.py --call-id   # Analyze specific call
+```
+
+## 📖 User Documentation
+
+For end-user and operator documentation, see the parent [/docs](../) directory:
+
+- **[Installation Guide](../INSTALLATION.md)** - Setup instructions
+- **[FreePBX Integration](../FreePBX-Integration-Guide.md)** - Dialplan configuration
+- **[Production Deployment](../PRODUCTION_DEPLOYMENT.md)** - Production best practices
+- **[Monitoring Guide](../MONITORING_GUIDE.md)** - Prometheus + Grafana
+- **[Tool Calling Guide](../TOOL_CALLING_GUIDE.md)** - Using tools from caller perspective
+
+## 🤝 Contributing Guidelines
+
+- Read the root [CONTRIBUTING.md](../../CONTRIBUTING.md) for Git workflow and PR process
+- Follow the code style in [code-style.md](code-style.md)
+- Add tests for new features
+- Update documentation as needed
+- Make at least one test call for telephony changes
+
+## 🆘 Getting Help
+
+- **Join our Discord:** [https://discord.gg/ysg8fphxUe](https://discord.gg/ysg8fphxUe) - Community support and discussions
+- **Stuck on something?** Check [Common Pitfalls](COMMON_PITFALLS.md)
+- **Architecture questions?** See [Architecture Deep Dive](architecture-deep-dive.md)
+- **Tool issues?** See [Tool Development](tool-development.md)
+- **Provider issues?** See [Provider Development](provider-development.md)
+
+## 📅 Project Status
+
+- **Latest Stable Version:** 7.5.2
+- **Next Release:** Unreleased (see the [roadmap](../ROADMAP.md))
+- **Active Branch:** `main` (feature branches → PR to `main`)
+- **Roadmap:** See [/docs/ROADMAP.md](../ROADMAP.md)
+- **Community Features:** GitHub Issues + Discussions
+
+---
+
+**Ready to contribute?** Start with the [Quick Start Guide](quickstart.md)! 🚀

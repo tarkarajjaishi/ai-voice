@@ -1,0 +1,256 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Golden Baseline #6: Full Local GPU - Privacy-First On-Premises Configuration
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# VALIDATED CONFIGURATION - Production-ready
+#
+# Architecture: Full Local Pipeline (Zero Cloud Dependencies)
+#   STT: Kroko (embedded ONNX, on-premise)
+#   LLM: Qwen 2.5 3B Instruct Q4_K_M (GPU-accelerated via llama.cpp)
+#   TTS: Kokoro (local neural TTS, voice=af_heart)
+#
+# Requirements:
+#   - NVIDIA GPU with 6GB+ VRAM (tested on RTX 4090)
+#   - 16GB+ system RAM recommended
+#   - Docker with NVIDIA Container Toolkit (nvidia-docker)
+#   - local-ai-server container with GPU support
+#   - First start downloads models (~1-2 GB total, 5-15 minutes)
+#
+# Performance (validated on RTX 4090):
+#   - Greeting TTS latency: ~2.3 seconds (request to first audio chunk)
+#   - Response latency: 1.7-3.5 seconds (user speech end to agent audio)
+#   - Audio quality: Good (Kokoro neural TTS, Kroko streaming STT)
+#   - Cost: $0.00 per minute (fully on-premises)
+#
+# Best for:
+#   - Full audio privacy (HIPAA, GDPR, air-gapped deployments)
+#   - Zero cloud cost operations
+#   - Organizations with strict data residency requirements
+#   - GPU-equipped on-premises servers
+#
+# Validated call: 1772323042.221 on RTX 4090
+#   - Greeting, two-way audio, barge-in, tool-driven hangup all confirmed
+#
+# For detailed parameter explanations, see: docs/Configuration-Reference.md
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Active Configuration
+config_version: 6
+active_pipeline: null
+default_provider: local
+
+# Audio Transport - AudioSocket for full agent providers
+audio_transport: audiosocket
+audiosocket:
+  format: slin
+  host: 0.0.0.0
+  port: 8090
+
+# Playback Mode - Streaming for lowest latency
+downstream_mode: stream
+
+# Contexts
+contexts:
+  default:
+    greeting: Hello, how can I help you today?
+    profile: telephony_ulaw_8k
+    prompt: >-
+      You are a helpful AI assistant running entirely on-premises.
+      Be concise and clear.
+
+      CALL ENDING:
+      - When the caller indicates they are done, say a brief farewell,
+        then use the hangup_call tool to end the call.
+      - NEVER mention tools or the word "hangup_call" to the caller.
+    provider: local
+    tools:
+      - hangup_call
+  demo_local_gpu:
+    greeting: "Hi! I'm Ava running fully on-premises with GPU acceleration. No cloud, no cost, full privacy! What can I help you with?"
+    prompt: >-
+      You are Ava (Asterisk Voice Agent) demonstrating the Full Local GPU pipeline.
+      All processing (speech recognition, language model, voice synthesis) runs
+      entirely on the local GPU with zero cloud dependencies.
+      Be helpful, conversational, and explain features clearly in 5-10 sentences.
+
+      CALL ENDING:
+      - When the caller indicates they are done, say a brief farewell,
+        then use the hangup_call tool to end the call.
+    profile: telephony_ulaw_8k
+    provider: local
+    tools:
+      - hangup_call
+
+# Barge-In Configuration
+barge_in:
+  enabled: true
+  energy_threshold: 1000
+  initial_protection_ms: 200
+  min_ms: 250
+  post_tts_end_protection_ms: 250
+  provider_fallback_enabled: true
+  provider_fallback_providers:
+    - local
+
+# VAD Configuration - Local VAD active (provider has no native AEC)
+vad:
+  enhanced_enabled: true
+  fallback_buffer_size: 128000
+  fallback_enabled: true
+  fallback_interval_ms: 4000
+  max_utterance_duration_ms: 10000
+  min_utterance_duration_ms: 600
+  use_provider_vad: false
+  utterance_padding_ms: 200
+  webrtc_aggressiveness: 1
+  webrtc_end_silence_frames: 50
+  webrtc_start_frames: 3
+
+# Streaming Configuration
+streaming:
+  chunk_size_ms: 20
+  connection_timeout_ms: 120000
+  continuous_stream: true
+  empty_backoff_ticks_max: 5
+  fallback_timeout_ms: 8000
+  greeting_min_start_ms: 40
+  jitter_buffer_ms: 950
+  keepalive_interval_ms: 5000
+  low_watermark_ms: 80
+  min_start_ms: 120
+  normalizer:
+    enabled: true
+    max_gain_db: 18.0
+    target_rms: 1400
+  provider_grace_ms: 500
+  sample_rate: 8000
+
+# Audio Profiles
+profiles:
+  default: telephony_ulaw_8k
+  telephony_ulaw_8k:
+    chunk_ms: auto
+    idle_cutoff_ms: 800
+    internal_rate_hz: 8000
+    provider_pref:
+      input_encoding: mulaw
+      input_sample_rate_hz: 8000
+      output_encoding: mulaw
+      output_sample_rate_hz: 8000
+    transport_out:
+      encoding: slin
+      sample_rate_hz: 8000
+  telephony_responsive:
+    chunk_ms: auto
+    idle_cutoff_ms: 600
+    internal_rate_hz: 8000
+    provider_pref:
+      input_encoding: mulaw
+      input_sample_rate_hz: 8000
+      output_encoding: mulaw
+      output_sample_rate_hz: 8000
+    transport_out:
+      encoding: slin
+      sample_rate_hz: 8000
+
+# Provider Configuration - Full Local (GPU-accelerated)
+providers:
+  local:
+    base_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
+    capabilities:
+      - stt
+      - llm
+      - tts
+    chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
+    connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
+    continuous_input: true
+    enabled: true
+    farewell_mode: ${LOCAL_FAREWELL_MODE:=asterisk}
+    farewell_timeout_sec: ${LOCAL_FAREWELL_TIMEOUT:=30.0}
+    greeting: Hello! I'm your local AI assistant running entirely on-premises.
+    instructions: >-
+      You are a helpful voice assistant running locally on GPU.
+      Be concise and friendly.
+    mode: full
+    # LLM - Qwen 2.5 3B Instruct (GPU-accelerated, Q4_K_M quantization)
+    llm_model: /app/models/llm/qwen2.5-3b-instruct-q4_k_m.gguf
+    max_tokens: 48
+    response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=10.0}
+    # STT - Kroko embedded (on-premise ONNX; configured via local-ai-server env)
+    stt_backend: kroko
+    kroko_language: en-US
+    temperature: 0.3
+    # TTS - Kokoro (local neural TTS)
+    tts_backend: kokoro
+    kokoro_model_path: /app/models/tts/kokoro
+    kokoro_voice: af_heart
+
+# LLM Fallback Configuration
+llm:
+  initial_greeting: Hello, how can I help you today?
+  prompt: Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked.
+
+# Pipelines - not used by monolithic local provider
+pipelines:
+  local_hybrid:
+    llm: openai_llm
+    options:
+      llm:
+        base_url: https://api.openai.com/v1
+        max_tokens: 150
+        model: gpt-4o-mini
+        temperature: 0.7
+      stt:
+        chunk_ms: 160
+        mode: stt
+        stream_format: pcm16_16k
+        streaming: true
+      tts:
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+    stt: local_stt
+    tts: local_tts
+
+# Asterisk Configuration
+asterisk:
+  app_name: asterisk-ai-voice-agent
+
+# ExternalMedia (not used by AudioSocket, but required by config schema)
+external_media:
+  codec: ulaw
+  direction: both
+  port_range: 18080:18099
+  rtp_host: 0.0.0.0
+  rtp_port: 18080
+
+# Tools Configuration
+tools:
+  enabled: true
+  hangup_call:
+    enabled: true
+    farewell_message: Thank you for calling. Goodbye!
+    require_confirmation: false
+
+# ═══════════════════════════════════════════════════════════════════════════
+# local-ai-server .env settings (set in project root .env)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# GPU_AVAILABLE=true
+# LOCAL_LLM_GPU_LAYERS=-1
+# LOCAL_LLM_MODEL_PATH=/app/models/llm/qwen2.5-3b-instruct-q4_k_m.gguf
+# LOCAL_LLM_MAX_TOKENS=48
+# LOCAL_LLM_TEMPERATURE=0.3
+# LOCAL_LLM_TOP_P=0.85
+# LOCAL_LLM_CONTEXT=2048
+# LOCAL_STT_BACKEND=kroko          # or faster_whisper, vosk
+# KROKO_EMBEDDED=1
+# KROKO_MODEL_PATH=/app/models/kroko/Kroko-EN-Community-64-L-Streaming-001.data
+# KROKO_LANGUAGE=en-US
+# LOCAL_TTS_BACKEND=kokoro
+# KOKORO_MODEL_PATH=/app/models/tts/kokoro
+# KOKORO_MODE=local
+# KOKORO_VOICE=af_heart
+# INCLUDE_KOKORO=true
+# INCLUDE_KROKO_EMBEDDED=true

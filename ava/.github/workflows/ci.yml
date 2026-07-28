@@ -1,0 +1,363 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, staging ]
+  pull_request:
+    branches: [ main, staging ]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Compile sources
+        run: |
+          python -m compileall -q .
+
+      - name: Check current release documentation
+        run: |
+          python scripts/check_release_docs.py
+
+      - name: Preflight script smoke (syntax)
+        run: |
+          bash -n preflight.sh
+
+      - name: Install script smoke (syntax)
+        run: |
+          bash -n install.sh
+
+      - name: Check for committed secrets (CRIT-2 defense-in-depth)
+        run: |
+          python scripts/check_no_committed_secrets.py
+
+      - name: Run tests with coverage
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          pytest -v \
+            -k "not integration and not test_deepgram_stt_adapter_transcribes and not test_resolve_stream_targets and not test_output_rate_drift_adjusts_active_rate and not test_session_requests_g711_when_target_mulaw" \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-report=html \
+            --cov-report=json \
+            --cov-fail-under=26.0 \
+            --maxfail=10 \
+            --tb=short
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage-reports
+          path: |
+            coverage.xml
+            htmlcov/
+          retention-days: 30
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          p = pathlib.Path("coverage.json")
+          if not p.exists():
+              sys.exit(0)
+          cov = json.loads(p.read_text())["totals"]["percent_covered"]
+          threshold = 26.0
+
+          msg = [
+              f"📊 **Test Coverage: {cov:.2f}%**",
+              f"✅ Threshold: {threshold}% (current baseline)",
+              "🎯 Next Target: 30%, Ultimate: 40%",
+              "✓ Coverage meets threshold" if cov >= threshold else "✗ Coverage below threshold",
+          ]
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as f:
+                  f.write("\n".join(msg) + "\n")
+          else:
+              print("\n".join(msg))
+          PY
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Admin UI backend tests (admin_ui/backend/tests)
+  # The root `pytest` run above only discovers the repo-root `tests/` suite, so
+  # the Admin backend tests (which import `from api import ...` and need
+  # admin_ui/backend on PYTHONPATH) never ran in CI. Run them explicitly here in
+  # an isolated job using the Admin backend's own pinned requirements.
+  # ─────────────────────────────────────────────────────────────────────────────
+  admin-backend-tests:
+    name: Admin UI backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            admin_ui/backend/requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r admin_ui/backend/requirements.txt -r requirements-dev.txt
+
+      - name: Run Admin backend tests
+        run: |
+          cd admin_ui/backend
+          PYTHONPATH=. pytest tests -q
+
+  # Frontend checks must gate pull requests. The extended regression workflow
+  # only runs after pushes to staging/main, which is too late to stop a broken
+  # Admin UI from merging.
+  admin-frontend-tests:
+    name: Admin UI frontend checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: admin_ui/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: admin_ui/frontend
+        run: npm ci
+
+      - name: Lint frontend
+        working-directory: admin_ui/frontend
+        run: npm run lint
+
+      - name: Test frontend
+        working-directory: admin_ui/frontend
+        run: npm test
+
+      - name: Build frontend
+        working-directory: admin_ui/frontend
+        run: npm run build
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Docker Image Size Check (AAVA-113)
+  # Ensures images don't exceed size budgets
+  # ─────────────────────────────────────────────────────────────────────────────
+  image-size:
+    name: Check Docker Image Sizes
+    # Drafts get the fast test/lint/compile suite on each push. Docker builds run
+    # for non-draft PR activity, or earlier when a maintainer applies `full-ci`.
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        (
+          contains(github.event.pull_request.labels.*.name, 'full-ci') ||
+          github.event.pull_request.draft == false
+        )
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build ai-engine image
+        run: docker build -t ai-engine:test .
+
+      # CI builds a minimal local-ai-server profile to keep PR checks fast and avoid
+      # exceeding GitHub runner disk limits. Full local backends are built/released
+      # via tagged releases and/or scheduled workflows.
+      - name: Build local-ai-server image (ci-min)
+        run: |
+          docker build -t local-ai-server:test ./local_ai_server \
+            --build-arg INCLUDE_VOSK=true \
+            --build-arg INCLUDE_SHERPA=false \
+            --build-arg INCLUDE_PIPER=true \
+            --build-arg INCLUDE_KOKORO=false \
+            --build-arg INCLUDE_LLAMA=true \
+            --build-arg INCLUDE_KROKO_EMBEDDED=false
+
+      - name: Check image sizes
+        run: |
+          echo "## 📦 Docker Image Sizes" >> $GITHUB_STEP_SUMMARY
+          
+          # ai-engine budget: 1.5GB
+          AI_ENGINE_SIZE=$(docker inspect ai-engine:test --format='{{.Size}}')
+          AI_ENGINE_MB=$((AI_ENGINE_SIZE / 1024 / 1024))
+          AI_ENGINE_BUDGET=1500
+          
+          echo "| Image | Size | Budget | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $AI_ENGINE_MB -gt $AI_ENGINE_BUDGET ]; then
+            echo "| ai-engine | ${AI_ENGINE_MB}MB | ${AI_ENGINE_BUDGET}MB | ❌ Over budget |" >> $GITHUB_STEP_SUMMARY
+            AI_ENGINE_PASS=false
+          else
+            echo "| ai-engine | ${AI_ENGINE_MB}MB | ${AI_ENGINE_BUDGET}MB | ✅ OK |" >> $GITHUB_STEP_SUMMARY
+            AI_ENGINE_PASS=true
+          fi
+          
+          # local-ai-server (ci-min, local-core) budget: 2.5GB
+          LOCAL_AI_SIZE=$(docker inspect local-ai-server:test --format='{{.Size}}')
+          LOCAL_AI_MB=$((LOCAL_AI_SIZE / 1024 / 1024))
+          LOCAL_AI_BUDGET=2500
+          
+          if [ $LOCAL_AI_MB -gt $LOCAL_AI_BUDGET ]; then
+            echo "| local-ai-server | ${LOCAL_AI_MB}MB | ${LOCAL_AI_BUDGET}MB | ❌ Over budget |" >> $GITHUB_STEP_SUMMARY
+            LOCAL_AI_PASS=false
+          else
+            echo "| local-ai-server | ${LOCAL_AI_MB}MB | ${LOCAL_AI_BUDGET}MB | ✅ OK |" >> $GITHUB_STEP_SUMMARY
+            LOCAL_AI_PASS=true
+          fi
+          
+          # Fail if any image exceeds budget
+          if [ "$AI_ENGINE_PASS" = "false" ] || [ "$LOCAL_AI_PASS" = "false" ]; then
+            echo ""
+            echo "⚠️ **One or more images exceed size budget!**" >> $GITHUB_STEP_SUMMARY
+            echo "For local-ai-server, CI uses a minimal build profile (no optional backends)." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Check outdated dependencies
+        continue-on-error: true
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 Outdated Dependencies" >> $GITHUB_STEP_SUMMARY
+          pip install pip-outdated || true
+          pip list --outdated --format=columns | head -20 >> $GITHUB_STEP_SUMMARY || echo "Unable to check" >> $GITHUB_STEP_SUMMARY
+
+  # CLI cross-compile check: the release workflow builds all five platforms,
+  # but PR CI previously built none, so platform-only breakage (e.g. unix-only
+  # syscalls on Windows) surfaced only at tag time. Build-only, no artifacts.
+  cli-cross-compile:
+    name: CLI cross-compile (all release targets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.22'
+          cache-dependency-path: cli/go.sum
+
+      - name: Build all release platforms
+        working-directory: cli
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build ./...
+            echo "OK: $target"
+          done
+
+      - name: Run CLI tests
+        working-directory: cli
+        run: go test ./...
+
+  # Branch protection requires this stable aggregate check instead of every
+  # implementation job. Drafts may skip the Docker build; ready/full-ci PRs,
+  # protected-branch pushes, and manual runs require it to pass.
+  pr-gate:
+    name: PR gate
+    if: always()
+    needs:
+      - build
+      - admin-backend-tests
+      - admin-frontend-tests
+      - image-size
+      - cli-cross-compile
+    runs-on: ubuntu-latest
+    env:
+      BUILD_RESULT: ${{ needs.build.result }}
+      BACKEND_RESULT: ${{ needs.admin-backend-tests.result }}
+      FRONTEND_RESULT: ${{ needs.admin-frontend-tests.result }}
+      IMAGE_SIZE_RESULT: ${{ needs.image-size.result }}
+      CLI_RESULT: ${{ needs.cli-cross-compile.result }}
+      FINAL_VALIDATION_REQUIRED: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+    steps:
+      - name: Verify required jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          failed=0
+          for entry in \
+            "Core tests=${BUILD_RESULT}" \
+            "Admin backend=${BACKEND_RESULT}" \
+            "Admin frontend=${FRONTEND_RESULT}" \
+            "CLI=${CLI_RESULT}"; do
+            name="${entry%%=*}"
+            result="${entry#*=}"
+            if [ "$result" != "success" ]; then
+              echo "::error::${name} finished with ${result}"
+              failed=1
+            fi
+          done
+
+          if [ "$FINAL_VALIDATION_REQUIRED" = "true" ]; then
+            if [ "$IMAGE_SIZE_RESULT" != "success" ]; then
+              echo "::error::Docker image-size validation is required but finished with ${IMAGE_SIZE_RESULT}"
+              failed=1
+            fi
+          elif [ "$IMAGE_SIZE_RESULT" != "success" ] && [ "$IMAGE_SIZE_RESULT" != "skipped" ]; then
+            echo "::error::Optional Docker image-size validation finished with ${IMAGE_SIZE_RESULT}"
+            failed=1
+          fi
+
+          {
+            echo "## PR gate"
+            echo ""
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Core tests | ${BUILD_RESULT} |"
+            echo "| Admin backend | ${BACKEND_RESULT} |"
+            echo "| Admin frontend | ${FRONTEND_RESULT} |"
+            echo "| CLI | ${CLI_RESULT} |"
+            echo "| Docker image sizes | ${IMAGE_SIZE_RESULT} |"
+            echo "| Final validation required | ${FINAL_VALIDATION_REQUIRED} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$failed"

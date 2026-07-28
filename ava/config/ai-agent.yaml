@@ -1,0 +1,964 @@
+active_pipeline: null
+asterisk:
+  app_name: asterisk-ai-voice-agent
+audio_transport: audiosocket
+audiosocket:
+  format: slin
+  host: 127.0.0.1
+  port: 8090
+barge_in:
+  enabled: true
+  initial_protection_ms: 200
+  min_ms: 250
+  energy_threshold: 1000
+  cooldown_ms: 500
+  pipeline_min_ms: 120
+  pipeline_energy_threshold: 300
+  pipeline_talk_detect_enabled: true
+  pipeline_talk_detect_silence_ms: 1200
+  pipeline_talk_detect_talking_threshold: 256
+  post_tts_end_protection_ms: 250
+  greeting_protection_ms: 5000
+  provider_fallback_enabled: true
+  provider_fallback_providers:
+    - google_live
+    - deepgram
+    - local
+    # ElevenLabs interruption delivery is Agent-dashboard controlled. Keep a
+    # caller-isolated local fallback so barge-in still works when that event is
+    # disabled or the provider misses a short telephony utterance.
+    - elevenlabs_agent
+    - grok
+  # Grok's native VAD remains authoritative, while this caller-isolated local
+  # fallback makes a short one-word interruption responsive on telephony audio.
+  # Other hosted providers retain the global 250 ms minimum.
+  provider_fallback_min_ms_by_provider:
+    grok: 120
+  provider_output_suppress_ms: 1200
+  provider_output_suppress_extend_ms: 600
+  provider_output_suppress_chunk_extend_ms: 250
+config_version: 6
+farewell_hangup_delay_sec: 3
+# Provider-start failure policy. The safe default plays an Asterisk prompt and
+# hangs up. To opt into dialplan recovery, set on_provider_failure to
+# dialplan_redirect and provide a context that does not route back into AAVA.
+on_provider_failure: announce_hangup
+provider_failure_prompt: sorry-youre-having-problems
+# provider_failure_redirect_context: aava-provider-failure
+# provider_failure_redirect_extension: s
+# provider_failure_redirect_priority: 1
+contexts: {}
+default_provider: local_hybrid
+downstream_mode: stream
+external_media:
+  codec: ulaw
+  direction: both
+  format: slin16
+  port_range: '18080:18099'
+  rtp_host: 0.0.0.0
+  rtp_port: 18080
+  sample_rate: 16000
+  allowed_remote_hosts:
+    - 127.0.0.1
+llm:
+  initial_greeting: Hello, how can I help you today?
+  prompt: Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked.
+pipelines:
+  local_hybrid:
+    llm: native_llm
+    options:
+      llm:
+        base_url: http://host.docker.internal:8080/v1
+        max_tokens: 200
+        model: mlx-community/Qwen3-8B-4bit
+        temperature: 0.7
+        extra_body:
+          chat_template_kwargs:
+            enable_thinking: false
+      stt:
+        ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+        chunk_ms: 160
+        mode: stt
+        stream_format: pcm16_16k
+        streaming: true
+      tts:
+        ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+        mode: tts
+        response_timeout_sec: 30
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+    stt: local_stt
+    tools: null
+    tts: local_tts
+  local_hybrid_groq:
+    llm: groq_llm
+    options:
+      llm:
+        base_url: https://api.groq.com/openai/v1
+        max_tokens: 200
+        model: llama-3.3-70b-versatile
+        temperature: 0.7
+      stt:
+        chunk_ms: 160
+        mode: stt
+        stream_format: pcm16_16k
+        streaming: true
+      tts:
+        mode: tts
+        response_timeout_sec: 30
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+    stt: local_stt
+    tts: local_tts
+  # Local STT + OpenAI LLM + ElevenLabs TTS (premium voice quality)
+  # Requires: ELEVENLABS_API_KEY + OPENAI_API_KEY in .env
+  hybrid_elevenlabs:
+    stt: local_stt
+    llm: openai_llm
+    tts: elevenlabs_tts
+    options:
+      stt:
+        chunk_ms: 160
+        mode: stt
+        streaming: true
+        stream_format: pcm16_16k
+      llm:
+        base_url: https://api.openai.com/v1
+        model: gpt-4o-mini
+        temperature: 0.7
+        max_tokens: 200
+      tts:
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+profiles:
+  default: telephony_ulaw_8k
+  openai_realtime_24k:
+    output_resampler: linear
+    chunk_ms: 20
+    idle_cutoff_ms: 0
+    internal_rate_hz: 24000
+    provider_pref:
+      input_encoding: pcm16
+      input_sample_rate_hz: 24000
+      output_encoding: pcm16
+      output_sample_rate_hz: 24000
+    transport_out:
+      encoding: slin
+      sample_rate_hz: 8000
+  telephony_responsive:
+    output_resampler: linear
+    chunk_ms: auto
+    idle_cutoff_ms: 600
+    internal_rate_hz: 8000
+    provider_pref:
+      input_encoding: mulaw
+      input_sample_rate_hz: 8000
+      output_encoding: mulaw
+      output_sample_rate_hz: 8000
+    transport_out:
+      encoding: slin
+      sample_rate_hz: 8000
+  telephony_ulaw_8k:
+    output_resampler: linear
+    chunk_ms: auto
+    idle_cutoff_ms: 800
+    internal_rate_hz: 8000
+    provider_pref:
+      input_encoding: mulaw
+      input_sample_rate_hz: 8000
+      output_encoding: mulaw
+      output_sample_rate_hz: 8000
+    transport_out:
+      encoding: ulaw
+      sample_rate_hz: 8000
+  telephony_enhanced_8k:
+    output_resampler: bandlimited
+    chunk_ms: auto
+    idle_cutoff_ms: 800
+    internal_rate_hz: 8000
+    provider_pref:
+      input_encoding: mulaw
+      input_sample_rate_hz: 8000
+      output_encoding: mulaw
+      output_sample_rate_hz: 8000
+    transport_out:
+      encoding: ulaw
+      sample_rate_hz: 8000
+  wideband_pcm_16k:
+    output_resampler: linear
+    # Wideband endpoints can expose more playback echo to Asterisk's raw DSP.
+    # This live-validated profile override rejects that echo while preserving
+    # intentional barge-in; 8 kHz profiles retain the global value of 256.
+    talk_detect_talking_threshold: 1000
+    chunk_ms: auto
+    idle_cutoff_ms: 1200
+    internal_rate_hz: 16000
+    provider_pref:
+      input_encoding: linear16
+      input_sample_rate_hz: 16000
+      output_encoding: linear16
+      output_sample_rate_hz: 16000
+    transport_out:
+      encoding: slin16
+      sample_rate_hz: 16000
+providers:
+  deepgram:
+    capabilities:
+      - stt
+      - llm
+      - tts
+    continuous_input: true
+    enabled: false
+    greeting: Hello, how can I help you today?
+    input_encoding: mulaw
+    input_gain_max_db: 0
+    input_gain_target_rms: 0
+    input_sample_rate_hz: 8000
+    instructions: Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked.
+    # Deepgram Voice Agent listen-provider model. Pre-v6.5.0 this YAML field
+    # was silently ignored and the provider hardcoded "nova-3"; v6.5.0 made
+    # this honor the config and we ship "nova-3" to preserve that effective
+    # default on upgrade. To use Flux conversational STT, change this to
+    # "flux-general-en" (English) or "flux-general-multi" — the provider
+    # will automatically add `version: "v2"` and Flux-specific tuning fields
+    # to the Settings JSON. Selectable from the Admin UI Deepgram form.
+    model: nova-3
+    output_encoding: mulaw
+    output_sample_rate_hz: 8000
+    tts_model: aura-2-thalia-en
+    type: full
+  google_live:
+    api_key: ${GOOGLE_API_KEY}
+    name: google_live
+    capabilities:
+      - stt
+      - llm
+      - tts
+    continuous_input: true
+    enable_input_transcription: true
+    enable_output_transcription: true
+    enabled: true
+    greeting: >-
+      ${GOOGLE_LIVE_GREETING:-Hi! I'm powered by Google Gemini Live API. Try
+      interrupting me!}
+    input_encoding: ulaw
+    input_gain_max_db: 0
+    input_gain_target_rms: 0
+    input_sample_rate_hz: 8000
+    llm_max_output_tokens: 8192
+    # Production-grade barge-in (server-side `interrupted` VAD) requires Vertex AI's GA Live model.
+    # Set `use_vertex_ai: true` and change this to `gemini-live-2.5-flash-native-audio` for production.
+    # The shipped Developer API alias below is preview-tier — fine for evaluation, unreliable for
+    # mid-utterance interruption. See docs/Provider-Google-Setup.md "Barge-In (Interruption)".
+    llm_model: gemini-2.5-flash-native-audio-latest
+    llm_temperature: 0.4
+    llm_top_k: 20
+    llm_top_p: 0.9
+    # Google Live: marker-driven hangup disabled — using tool-driven hangup (hangup_call) instead.
+    # Tool-driven hangup is more reliable with the CALL ENDING PROTOCOL prompt.
+    hangup_markers_enabled: false
+    # Google Live: disable WebSocket keepalive by default. We saw 1008 disconnects correlated with ping/keepalive
+    # behavior; opt-in if needed once verified for your account/model.
+    ws_keepalive_enabled: false
+    output_encoding: linear16
+    output_sample_rate_hz: 24000
+    provider_input_encoding: linear16
+    provider_input_sample_rate_hz: 16000
+    response_modalities: audio
+    target_encoding: ulaw
+    target_sample_rate_hz: 8000
+    tts_voice_name: Aoede
+    type: full
+    # Server-side VAD tuning (realtimeInputConfig.automaticActivityDetection)
+    # Controls how Google detects speech start/end in the audio stream.
+    vad_start_of_speech_sensitivity: START_SENSITIVITY_HIGH
+    vad_end_of_speech_sensitivity: END_SENSITIVITY_HIGH
+    vad_prefix_padding_ms: 20
+    vad_silence_duration_ms: 500
+  local:
+    # Local AI Server WebSocket URL. Bridge network uses container name.
+    base_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+    ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
+    capabilities:
+      - stt
+      - llm
+      - tts
+    chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
+    connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
+    continuous_input: true
+    enabled: true
+    farewell_mode: ${LOCAL_FAREWELL_MODE:=asterisk}
+    farewell_timeout_sec: ${LOCAL_FAREWELL_TIMEOUT:=30.0}
+    tool_call_policy: ${LOCAL_TOOL_CALL_POLICY:=auto}
+    tool_gateway_enabled: ${LOCAL_TOOL_GATEWAY_ENABLED:=true}
+    greeting: Hello! I'm your local AI assistant running entirely on-premises.
+    instructions: >-
+      You are a helpful voice assistant running locally. Be concise and
+      friendly.
+    llm_model: models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf
+    max_tokens: 64
+    response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=10.0}
+    stt_model: models/stt/vosk-model-en-us-0.22
+    temperature: 0.4
+    tts_voice: /app/models/tts/en_US-lessac-medium.onnx
+    kokoro_model_path: /app/models/tts/kokoro
+    tts_backend: kokoro
+    type: full
+  local_llm:
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
+    capabilities:
+      - llm
+    enabled: false
+    llm_model: models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf
+    max_tokens: 32
+    temperature: 0.4
+    type: local
+    ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+  local_stt:
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
+    capabilities:
+      - stt
+    chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
+    connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
+    enabled: true
+    response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=10.0}
+    stt_backend: vosk
+    stt_model: models/stt/vosk-model-en-us-0.22
+    type: local
+    ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+  local_tts:
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
+    capabilities:
+      - tts
+    enabled: true
+    response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=10.0}
+    tts_voice: models/tts/en_US-lessac-medium.onnx
+    type: local
+    ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+  native_llm:
+    capabilities:
+      - llm
+    api_key: not-needed
+    chat_base_url: http://host.docker.internal:8080/v1
+    chat_model: mlx-community/Qwen3-8B-4bit
+    enabled: true
+    response_timeout_sec: 15
+    temperature: 0.7
+    type: openai
+  openai_llm:
+    capabilities:
+      - llm
+    api_key: ${OPENAI_API_KEY}
+    chat_base_url: https://api.openai.com/v1
+    chat_model: gpt-4o-mini
+    enabled: false
+    response_timeout_sec: 5
+    temperature: 0.7
+    type: openai
+  groq_llm:
+    capabilities:
+      - llm
+    api_key: ${GROQ_API_KEY}
+    chat_base_url: https://api.groq.com/openai/v1
+    chat_model: llama-3.3-70b-versatile
+    enabled: false
+    response_timeout_sec: 10
+    temperature: 0.7
+    tools_enabled: false
+    type: openai
+  groq_stt:
+    capabilities:
+      - stt
+    type: groq
+    enabled: false
+    # API key comes from GROQ_API_KEY env var
+    stt_base_url: https://api.groq.com/openai/v1/audio/transcriptions
+    stt_model: whisper-large-v3-turbo
+    response_format: json
+    temperature: 0
+    request_timeout_sec: 15
+  groq_tts:
+    capabilities:
+      - tts
+    type: groq
+    enabled: false
+    # API key comes from GROQ_API_KEY env var
+    tts_base_url: https://api.groq.com/openai/v1/audio/speech
+    tts_model: canopylabs/orpheus-v1-english
+    voice: hannah
+    response_format: wav
+    max_input_chars: 200
+    target_encoding: mulaw
+    target_sample_rate_hz: 8000
+    chunk_size_ms: 20
+    request_timeout_sec: 15
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Azure Speech Service — STT & TTS (REST API)
+  # Requires AZURE_SPEECH_KEY in .env and a valid Azure region below.
+  # ─────────────────────────────────────────────────────────────────────────────
+  azure_stt:
+    type: azure
+    capabilities:
+      - stt
+    enabled: false
+    # Azure region (e.g. eastus, westeurope, southeastasia)
+    region: eastus
+    # BCP-47 recognition language
+    language: en-US
+    # 'realtime' = one-shot STT REST | 'fast' = Fast Transcription API
+    variant: realtime
+    request_timeout_sec: 15.0
+  azure_tts:
+    type: azure
+    capabilities:
+      - tts
+    enabled: false
+    region: eastus
+    # Neural voice name — see https://aka.ms/speech/voices
+    voice_name: en-US-JennyNeural
+    # Azure output format — telephony-optimised RIFF PCM (matches UI quick-add template)
+    output_format: riff-8khz-16bit-mono-pcm
+    target_encoding: mulaw
+    target_sample_rate_hz: 8000
+    chunk_size_ms: 20
+    request_timeout_sec: 15.0
+  minimax_llm:
+    capabilities:
+      - llm
+    chat_base_url: https://api.minimax.io/v1
+    # Domestic (China) URL: https://api.minimaxi.com/v1
+    chat_model: MiniMax-M3
+    # Alternatives: MiniMax-M2.7, MiniMax-M2.7-highspeed
+    enabled: false
+    # API key comes from MINIMAX_API_KEY env var
+    temperature: 1.0
+    response_timeout_sec: 30
+    type: minimax
+  ollama_llm:
+    capabilities:
+      - llm
+    base_url: http://localhost:11434
+    model: llama3.2
+    enabled: false
+    temperature: 0.7
+    max_tokens: 200
+    timeout_sec: 60
+    tools_enabled: true
+    type: ollama
+  openai_realtime:
+    base_url: wss://api.openai.com/v1/realtime
+    capabilities:
+      - stt
+      - llm
+      - tts
+    continuous_input: true
+    egress_pacer_enabled: false
+    egress_pacer_warmup_ms: 320
+    enabled: false
+    greeting: Hello, how can I help you today?
+    input_encoding: ulaw
+    input_gain_max_db: 0
+    input_gain_target_rms: 0
+    input_sample_rate_hz: 8000
+    instructions: You are a voice assistant. Always speak your responses out loud.
+    max_response_output_tokens: 4096
+    api_version: ga
+    model: gpt-realtime
+    organization: ''
+    output_encoding: mulaw
+    output_sample_rate_hz: 24000
+    provider_input_encoding: linear16
+    provider_input_sample_rate_hz: 24000
+    response_modalities:
+      - audio
+      - text
+    target_encoding: mulaw
+    target_sample_rate_hz: 8000
+    temperature: 0.6
+    turn_detection:
+      create_response: true
+      prefix_padding_ms: 300
+      silence_duration_ms: 1000
+      threshold: 0.5
+      type: server_vad
+    type: openai_realtime
+    voice: alloy
+  elevenlabs_agent:
+    type: full
+    enabled: false
+    capabilities:
+      - stt
+      - llm
+      - tts
+    input_encoding: ulaw
+    input_sample_rate_hz: 8000
+    provider_input_encoding: pcm16
+    provider_input_sample_rate_hz: 16000
+    output_encoding: pcm16
+    output_sample_rate_hz: 16000
+    target_encoding: ulaw
+    target_sample_rate_hz: 8000
+    voice_id: uDsPstFWFBUXjIBimV7s
+    model_id: eleven_flash_v2_5
+    voice_settings:
+      stability: 0.5
+      similarity_boost: 0.75
+      style: 0
+      use_speaker_boost: true
+    greeting: Hello! I'm your ElevenLabs voice assistant. How can I help you today?
+    instructions: You are a helpful voice assistant. Be concise and friendly.
+    continuous_input: true
+    input_gain_target_rms: 0
+    input_gain_max_db: 0
+  # ElevenLabs TTS - Modular pipeline adapter for STT→LLM→TTS pipelines
+  # Use with pipelines (e.g., local_stt + openai_llm + elevenlabs_tts)
+  # Requires ELEVENLABS_API_KEY in .env
+  elevenlabs_tts:
+    type: elevenlabs
+    enabled: true
+    capabilities:
+      - tts
+    voice_id: "21m00Tcm4TlvDq8ikWAM"   # Rachel (warm, professional)
+    model_id: "eleven_turbo_v2_5"        # Fast, high-quality
+    output_format: "ulaw_8000"           # Telephony-optimized
+    stability: 0.5
+    similarity_boost: 0.75
+    style: 0.0
+    use_speaker_boost: true
+  openai_stt:
+    enabled: false
+    capabilities:
+      - stt
+    input_encoding: linear16
+    input_sample_rate_hz: 16000
+    stt_base_url: https://api.openai.com/v1/audio/transcriptions
+    stt_model: whisper-1
+    response_format: json
+    temperature: 0
+    request_timeout_sec: 15
+    type: openai
+  openai_tts:
+    enabled: false
+    capabilities:
+      - tts
+    response_format: wav
+    target_encoding: mulaw
+    target_sample_rate_hz: 8000
+    tts_base_url: https://api.openai.com/v1/audio/speech
+    tts_model: tts-1
+    type: openai
+    voice: alloy
+streaming:
+  chunk_size_ms: 20
+  connection_timeout_ms: 120000
+  continuous_stream: true
+  diag_enable_taps: true
+  diag_out_dir: /tmp/ai-engine-taps
+  diag_post_secs: 1
+  diag_pre_secs: 1
+  empty_backoff_ticks_max: 5
+  fallback_timeout_ms: 8000
+  greeting_min_start_ms: 40
+  # ExternalMedia greeting reliability: wait briefly for inbound RTP to establish the remote endpoint,
+  # then fall back to file playback if RTP is still not routable (Asterisk may not emit RTP until speech).
+  greeting_rtp_wait_ms: 250
+  jitter_buffer_ms: 950
+  keepalive_interval_ms: 5000
+  low_watermark_ms: 80
+  min_start_ms: 60
+  normalizer:
+    enabled: true
+    max_gain_db: 18
+    target_rms: 1400
+  provider_grace_ms: 200
+  sample_rate: 8000
+
+# ============================================================================
+# In-Call HTTP Tools (AI-invokable during conversation)
+# ============================================================================
+in_call_tools:
+  # Example: n8n intent router (in-call) - AI sends the user message to an n8n webhook
+  # Disabled by default. Enable and set URL to test.
+  sample_n8n_in_call_tool:
+    kind: in_call_http_lookup
+    enabled: false
+    is_global: false
+    description: "Example in-call tool: send user message to an n8n webhook and return a reply."
+    timeout_ms: 5000
+    url: "https://your-n8n-instance.com/webhook/intent-router"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      # Authorization: "Bearer ${N8N_API_KEY}"
+    body_template: |
+      {
+        "call_id": "{call_id}",
+        "caller_number": "{caller_number}",
+        "context": "{context_name}",
+        "userMessage": "{userMessage}"
+      }
+    parameters:
+      - name: userMessage
+        type: string
+        description: "The user message to send to the webhook."
+        required: true
+    output_variables:
+      reply: "reply"
+      intent: "intent"
+    return_raw_json: false
+    error_message: "I couldn't reach the automation service right now. Please try again."
+tools:
+  ai_identity:
+    name: AI Agent
+    number: '6789'
+  
+  # ============================================================================
+  # Phase Tools (Milestone 24) - Pre-call and Post-call HTTP integrations
+  # ============================================================================
+
+  # Example: GoHighLevel pre-call lookup (context-specific)
+  # Disabled by default. Enable and set URL/headers for your GHL account to test.
+  sample_gohighlevel_pre_call_lookup:
+    kind: generic_http_lookup
+    phase: pre_call
+    enabled: false
+    is_global: false
+    timeout_ms: 5000
+    hold_audio_file: "custom/please-wait"
+    hold_audio_threshold_ms: 500
+    url: "https://services.leadconnectorhq.com/contacts/search"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      # Authorization: "Bearer ${GHL_API_KEY}"
+      # Version: "2021-07-28"
+    body_template: |
+      {
+        "query": "{caller_number}"
+      }
+    output_variables:
+      ghl_contact_id: "contacts[0].id"
+      ghl_contact_name: "contacts[0].name"
+      ghl_contact_email: "contacts[0].email"
+  
+  # Example: Post-call webhook (global - fires for all calls)
+  # Sends call data to external system after call ends
+  demo_post_call_webhook:
+    kind: generic_webhook
+    phase: post_call
+    enabled: false  # Set to true and configure URL to test
+    is_global: true
+    timeout_ms: 5000
+    url: "https://your-webhook-endpoint.com/call-completed"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      # Authorization: "Bearer ${WEBHOOK_API_KEY}"
+    payload_template: |
+      {
+        "schema_version": 1,
+        "event_type": "call_completed",
+        "call_id": "{call_id}",
+        "caller_number": "{caller_number}",
+        "caller_name": "{caller_name}",
+        "call_duration": {call_duration},
+        "call_outcome": "{call_outcome}",
+        "transcript": {transcript_json},
+        "context": "{context_name}",
+        "provider": "{provider}",
+        "timestamp": "{call_end_time}"
+      }
+
+  # Example: Discord webhook - posts call summary to a Discord channel (context-specific)
+  # Disabled by default. Enable and add your Discord webhook URL to test.
+  sample_discord_post_call_webhook:
+    kind: generic_webhook
+    phase: post_call
+    enabled: false
+    is_global: false
+    timeout_ms: 5000
+    url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "content": "Call completed\\nContext: {context_name}\\nCaller: {caller_number} ({caller_name})\\nDuration: {call_duration}s\\nOutcome: {call_outcome}\\nProvider: {provider}\\n\\nSummary: {summary}"
+      }
+    generate_summary: true
+
+  # Example: Discord webhook - posts call summary to a Discord channel
+  # discord_webhook:
+  #   kind: generic_webhook
+  #   phase: post_call
+  #   enabled: false  # Set to true and add your webhook URL
+  #   is_global: true
+  #   timeout_ms: 5000
+  #   url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+  #   method: POST
+  #   headers:
+  #     Content-Type: "application/json"
+  #   payload_template: |
+  #     {"content": "📞 **Call Completed**\n\n**Duration:** {call_duration}s\n**Outcome:** {call_outcome}\n**Context:** {context_name}\n**Provider:** {provider}\n**Time:** {call_end_time}\n\n**Summary:**\n{summary}"}
+  #   generate_summary: true
+
+  # Example: n8n workflow webhook - triggers n8n automation after calls
+  # n8n_webhook:
+  #   kind: generic_webhook
+  #   phase: post_call
+  #   enabled: false  # Set to true and add your n8n webhook URL
+  #   is_global: true
+  #   timeout_ms: 5000
+  #   url: "https://your-n8n-instance.com/webhook/your-webhook-path"
+  #   method: POST
+  #   headers:
+  #     Content-Type: "application/json"
+  #   payload_template: |
+  #     {
+  #       "event_type": "call_completed",
+  #       "call_id": "{call_id}",
+  #       "caller_number": "{caller_number}",
+  #       "caller_name": "{caller_name}",
+  #       "call_duration": {call_duration},
+  #       "call_outcome": "{call_outcome}",
+  #       "summary": "{summary}",
+  #       "context": "{context_name}",
+  #       "provider": "{provider}",
+  #       "timestamp": "{call_end_time}"
+  #     }
+  #   generate_summary: true
+
+  # Example: Pre-call CRM lookup (context-specific)
+  # Fetches customer data before AI speaks
+  # demo_crm_lookup:
+  #   kind: generic_http_lookup
+  #   phase: pre_call
+  #   enabled: false
+  #   is_global: false
+  #   timeout_ms: 2000
+  #   hold_audio_file: "custom/please-wait"  # Asterisk sound file
+  #   hold_audio_threshold_ms: 500
+  #   url: "https://api.example.com/contacts/lookup"
+  #   method: GET
+  #   headers:
+  #     Authorization: "Bearer ${CRM_API_KEY}"
+  #   query_params:
+  #     phone: "{caller_number}"
+  #   output_variables:
+  #     customer_name: "contact.name"
+  #     customer_email: "contact.email"
+  #     account_status: "contact.status"
+  cancel_transfer:
+    allow_during_ring: true
+    enabled: false
+  check_extension_status:
+    restrict_to_configured_extensions: true
+  default_action_timeout: 30
+  enabled: true
+  extensions:
+    internal:
+      '6000':
+        action_type: transfer
+        device_state_tech: auto
+        aliases:
+          - agent
+          - representative
+          - human
+          - real person
+          - live person
+          - someone
+          - support
+          - sales
+          - operator
+          - help desk
+        description: Live customer service representative
+        dial_string: SIP/6000
+        mode: warm
+        name: Live Agent
+        timeout: 30
+        transfer: true
+  hangup_call:
+    enabled: true
+    farewell_message: Thank you for calling. Goodbye!
+    require_confirmation: false
+    policy:
+      mode: normal
+      enforce_transcript_offer: false
+      block_during_contact_capture: true
+      markers:
+        end_call:
+          - no transcript
+          - no transcript needed
+          - don't send a transcript
+          - do not send a transcript
+          - no need for a transcript
+          - no thanks
+          - no thank you
+          - that's all
+          - that is all
+          - that's it
+          - that is it
+          - nothing else
+          - all set
+          - all good
+          - end the call
+          - end call
+          - hang up
+          - hangup
+          - goodbye
+          - bye
+        assistant_farewell:
+          - goodbye
+          - bye
+          - thank you for calling
+          - thanks for calling
+          - have a great day
+          - have a good day
+          - take care
+          - ending the call
+          - i'll let you go
+        affirmative:
+          - yes
+          - yeah
+          - yep
+          - correct
+          - that's correct
+          - thats correct
+          - that's right
+          - thats right
+          - right
+          - exactly
+          - affirmative
+        negative:
+          - no
+          - nope
+          - nah
+          - negative
+          - don't
+          - dont
+          - do not
+          - not
+          - not needed
+          - no need
+          - no thanks
+          - no thank you
+          - decline
+          - skip
+  leave_voicemail:
+    enabled: false
+    extension: '2765'
+  request_transcript:
+    admin_email: ''
+    api_key: ${REQUEST_TRANSCRIPT_API_KEY:-}
+    common_domains:
+      - gmail.com
+      - yahoo.com
+      - outlook.com
+      - hotmail.com
+      - icloud.com
+    confirm_email: true
+    enabled: false
+    from_email: ${REQUEST_TRANSCRIPT_FROM_EMAIL:-noreply@example.com}
+    from_name: ${REQUEST_TRANSCRIPT_FROM_NAME:-Asterisk AI Voice Agent}
+    max_attempts: 2
+    provider: ${REQUEST_TRANSCRIPT_PROVIDER:-resend}
+    validate_domain: false
+  send_email_summary:
+    admin_email: ${SEND_EMAIL_ADMIN:-}
+    api_key: ${SEND_EMAIL_API_KEY:-}
+    enabled: false
+    from_email: ${SEND_EMAIL_FROM:-noreply@example.com}
+    from_name: ${SEND_EMAIL_FROM_NAME:-Asterisk AI Voice Agent}
+    include_metadata: true
+    include_transcript: true
+    provider: ${SEND_EMAIL_PROVIDER:-resend}
+  transfer:
+    defer_until_playback_complete: true
+    deferred_strategy: drain_then_dial
+    predial_bridge_wait_timeout_sec: 10
+    predial_timeout_seconds: 30
+    predial_wait_moh_class: default
+    extension_context: from-internal
+    queue_context: ext-queues
+    ringgroup_context: ext-group
+    technology: PJSIP
+    destinations:
+      sales_agent:
+        description: Sales agent
+        dialplan_context: from-internal
+        target: '2765'
+        type: extension
+        live_agent: false
+      sales_queue: null
+      sales_team: null
+      support_agent: null
+      support_queue: null
+      support_team: null
+    enabled: false
+  google_calendar:
+    enabled: false
+mcp:
+  enabled: false
+  servers:
+    weather:
+      transport: stdio
+      command:
+        - python3
+        - '-m'
+        - src.mcp_servers.weather_mcp_server
+      defaults:
+        timeout_ms: 15000
+        slow_response_threshold_ms: 3000
+        slow_response_message: Let me check the weather for you, one moment...
+      tools:
+        - name: get_weather_by_city
+          expose_as: mcp_weather_get_city
+          speech_field: spoken
+    aviation_atis:
+      transport: stdio
+      command:
+        - python3
+        - '-m'
+        - src.mcp_servers.aviation_atis_server
+        - '--config'
+        - /app/config/aviation_atis.yaml
+      env:
+        METNO_USER_AGENT: >-
+          Asterisk-AI-Voice-Agent
+          (+https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk)
+      defaults:
+        timeout_ms: 15000
+        slow_response_threshold_ms: 3000
+        slow_response_message: Let me get the current ATIS for you, one moment...
+      tools:
+        - name: get_atis
+          expose_as: mcp_aviation_atis
+          description: Get current ATIS for an ICAO airport code (e.g., LSMP, KJFK)
+          speech_field: atis_text
+# Provider-independent caller inactivity policy. Timing starts only while the
+# agent is ready and neither speaking nor processing a caller turn.
+no_input:
+  enabled: true
+  inbound_enabled: true
+  outbound_enabled: false
+  initial_timeout_sec: 30
+  grace_timeout_sec: 15
+  max_check_ins: 1
+  check_in_message: "Are you still there?"
+  final_message: "I still can't hear you, so I'll end the call now. Goodbye."
+vad:
+  enhanced_enabled: true
+  fallback_buffer_size: 128000
+  fallback_enabled: true
+  fallback_interval_ms: 4000
+  max_utterance_duration_ms: 10000
+  min_utterance_duration_ms: 600
+  use_provider_vad: false
+  utterance_padding_ms: 200
+  webrtc_aggressiveness: 1
+  webrtc_end_silence_frames: 50
+  webrtc_start_frames: 3

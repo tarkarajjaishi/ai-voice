@@ -1,0 +1,211 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Golden Baseline #5: ElevenLabs Conversational AI - Full Agent Provider
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# VALIDATED CONFIGURATION - Production-ready
+#
+# Requirements:
+#   - ELEVENLABS_API_KEY in .env file
+#   - ELEVENLABS_AGENT_ID in .env file
+#   - Asterisk 18+ with ARI enabled
+#
+# Performance:
+#   - Response time: <2 seconds typical (model-dependent)
+#   - Audio quality: Premium (ElevenLabs voices)
+#
+# Best for:
+#   - Premium voice quality
+#   - Natural-sounding conversations with full agent behavior
+#
+# For detailed parameter explanations, see: docs/Configuration-Reference.md
+# For the provider guide, see: docs/Provider-ElevenLabs-Setup.md
+# ═══════════════════════════════════════════════════════════════════════════
+
+config_version: 6
+active_pipeline: local_hybrid  # Don't change - uses provider override via contexts
+default_provider: elevenlabs_agent
+
+# Audio Transport - AudioSocket for full agent providers
+audio_transport: audiosocket
+audiosocket:
+  format: slin
+  host: 0.0.0.0
+  port: 8090
+
+# Playback Mode
+downstream_mode: stream
+
+# Contexts
+contexts:
+  default:
+    greeting: Hello, how can I help you today?
+    profile: telephony_ulaw_8k
+    prompt: You are a helpful AI assistant. Be concise and clear.
+    provider: elevenlabs_agent
+  demo_elevenlabs:
+    greeting: "Hi! I'm Ava demonstrating ElevenLabs Conversational AI. Ask me anything about the Asterisk AI Voice Agent project."
+    prompt: "You are Ava (Asterisk Voice Agent) demonstrating ElevenLabs. Be helpful, conversational, and explain features clearly in 5-10 sentences."
+    profile: telephony_ulaw_8k
+    provider: elevenlabs_agent
+    tools:
+      - transfer
+      - cancel_transfer
+      - hangup_call
+      - leave_voicemail
+      - send_email_summary
+      - request_transcript
+
+# Barge-In
+barge_in:
+  enabled: true
+  energy_threshold: 700
+  initial_protection_ms: 100
+  min_ms: 150
+  post_tts_end_protection_ms: 100
+
+# VAD
+vad:
+  enhanced_enabled: true
+  fallback_buffer_size: 128000
+  fallback_enabled: true
+  fallback_interval_ms: 4000
+  max_utterance_duration_ms: 10000
+  min_utterance_duration_ms: 600
+  use_provider_vad: false
+  utterance_padding_ms: 200
+  webrtc_aggressiveness: 1
+  webrtc_end_silence_frames: 50
+  webrtc_start_frames: 3
+
+# Streaming
+streaming:
+  chunk_size_ms: 20
+  connection_timeout_ms: 120000
+  continuous_stream: true
+  empty_backoff_ticks_max: 5
+  fallback_timeout_ms: 8000
+  greeting_min_start_ms: 40
+  jitter_buffer_ms: 950
+  keepalive_interval_ms: 5000
+  low_watermark_ms: 80
+  min_start_ms: 120
+  normalizer:
+    enabled: true
+    max_gain_db: 18.0
+    target_rms: 1400
+  provider_grace_ms: 500
+  sample_rate: 8000
+
+# Audio Profiles
+profiles:
+  default: telephony_responsive
+  telephony_ulaw_8k:
+    chunk_ms: auto
+    idle_cutoff_ms: 800
+    internal_rate_hz: 8000
+    provider_pref:
+      input_encoding: mulaw
+      input_sample_rate_hz: 8000
+      output_encoding: mulaw
+      output_sample_rate_hz: 8000
+    transport_out:
+      encoding: slin
+      sample_rate_hz: 8000
+  telephony_responsive:
+    chunk_ms: auto
+    idle_cutoff_ms: 600
+    internal_rate_hz: 8000
+    provider_pref:
+      input_encoding: mulaw
+      input_sample_rate_hz: 8000
+      output_encoding: mulaw
+      output_sample_rate_hz: 8000
+    transport_out:
+      encoding: slin
+      sample_rate_hz: 8000
+
+# Provider Configuration - ElevenLabs Agent
+providers:
+  elevenlabs_agent:
+    enabled: true
+    type: full
+    capabilities:
+      - stt
+      - llm
+      - tts
+    greeting: Hello! I'm your ElevenLabs voice assistant. How can I help you today?
+    instructions: You are a helpful voice assistant. Be concise and friendly.
+    continuous_input: true
+    # Telephony input
+    input_encoding: ulaw
+    input_sample_rate_hz: 8000
+    # Provider I/O
+    provider_input_encoding: pcm16
+    provider_input_sample_rate_hz: 16000
+    output_encoding: pcm16
+    output_sample_rate_hz: 16000
+    # Telephony target
+    target_encoding: ulaw
+    target_sample_rate_hz: 8000
+    # Voice selection (example values; override via your ElevenLabs agent + voice)
+    voice_id: "uDsPstFWFBUXjIBimV7s"
+    model_id: eleven_flash_v2_5
+    voice_settings:
+      stability: 0.5
+      similarity_boost: 0.75
+      style: 0.0
+      use_speaker_boost: true
+
+  # ElevenLabs TTS - Modular pipeline adapter for STT→LLM→TTS pipelines
+  # Use this with pipelines (e.g., local_stt + openai_llm + elevenlabs_tts)
+  elevenlabs_tts:
+    type: elevenlabs
+    enabled: true
+    capabilities:
+      - tts
+    voice_id: "21m00Tcm4TlvDq8ikWAM"   # Rachel (warm, professional)
+    model_id: "eleven_turbo_v2_5"        # Fast, high-quality
+    output_format: "ulaw_8000"           # Telephony-optimized
+    stability: 0.5
+    similarity_boost: 0.75
+    style: 0.0
+    use_speaker_boost: true
+
+# LLM fallback (unused in full agent mode but required by schema)
+llm:
+  initial_greeting: Hello, how can I help you today?
+  prompt: Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked.
+
+# Pipelines - required but not used by monolithic provider
+pipelines:
+  local_hybrid:
+    llm: openai_llm
+    options:
+      llm:
+        base_url: https://api.openai.com/v1
+        max_tokens: 150
+        model: gpt-4o-mini
+        temperature: 0.7
+      stt:
+        chunk_ms: 160
+        mode: stt
+        stream_format: pcm16_16k
+        streaming: true
+      tts:
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+    stt: local_stt
+    tts: local_tts
+
+asterisk:
+  app_name: asterisk-ai-voice-agent
+
+# ExternalMedia (not used by AudioSocket, but required by config schema)
+external_media:
+  codec: ulaw
+  direction: both
+  port_range: 18080:18099
+  rtp_host: 0.0.0.0
+  rtp_port: 18080
+

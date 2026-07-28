@@ -1,0 +1,312 @@
+# platforms.yaml - Cross-platform configuration for AAVA
+# AAVA-126: Cross-Platform Support
+#
+# This file defines platform-specific commands and paths used by:
+# - preflight.sh (bash script)
+# - CLI agent check command (Go)
+# - Admin UI backend (Python)
+#
+# To add a new distro: copy an existing section and modify
+
+# =============================================================================
+# Debian Family
+# =============================================================================
+debian:
+  name: "Debian/Ubuntu Family"
+  os_ids:
+    - debian
+    - ubuntu
+    - linuxmint
+  
+  init_system: systemd
+  
+  docker:
+    install_docs: "https://docs.docker.com/engine/install/debian/"
+    aava_docs: "docs/INSTALLATION.md"
+    install_cmd: |
+      curl -fsSL https://get.docker.com | sh
+    start_cmd: "sudo systemctl start docker"
+    enable_cmd: "sudo systemctl enable docker"
+    user_group_cmd: "sudo usermod -aG docker $USER"
+    rootless_start_cmd: "systemctl --user start docker"
+    rootless_docs: "docs/CROSS_PLATFORM_PLAN.md"
+  
+  compose:
+    install_docs: "https://docs.docker.com/compose/install/linux/"
+    aava_docs: "docs/INSTALLATION.md"
+    install_cmd: |
+      sudo apt-get update
+      sudo apt-get install -y docker-compose-plugin
+    upgrade_cmd: "sudo apt-get update && sudo apt-get install -y docker-compose-plugin"
+  
+  selinux:
+    present: false
+    aava_docs: "docs/INSTALLATION.md"
+  
+  apparmor:
+    present: true
+    # AppArmor is auto-configured by Docker on Ubuntu/Debian
+    # No manual intervention typically needed
+  
+  firewall:
+    type: "ufw"
+    aava_docs: "docs/INSTALLATION.md"
+    open_port_cmd: "sudo ufw allow {port}/tcp"
+    check_cmd: "sudo ufw status"
+  
+  packages:
+    update_cmd: "sudo apt-get update"
+    install_cmd: "sudo apt-get install -y {packages}"
+  
+  paths:
+    asterisk_config:
+      - "/etc/asterisk"
+    asterisk_sounds:
+      - "/var/lib/asterisk/sounds"
+      - "/usr/share/asterisk/sounds"
+    media_default: "/mnt/asterisk_media/ai-generated"
+
+# =============================================================================
+# Ubuntu-specific overrides
+# =============================================================================
+ubuntu:
+  inherit: debian
+  name: "Ubuntu"
+  
+  docker:
+    install_docs: "https://docs.docker.com/engine/install/ubuntu/"
+
+# =============================================================================
+# RHEL Family
+# =============================================================================
+rhel:
+  name: "RHEL/CentOS Family"
+  os_ids:
+    - rhel
+    - centos
+    - rocky
+    - almalinux
+    - fedora
+  
+  init_system: systemd
+  
+  docker:
+    install_docs: "https://docs.docker.com/engine/install/centos/"
+    aava_docs: "docs/INSTALLATION.md"
+    install_cmd: |
+      if command -v dnf >/dev/null 2>&1; then
+        sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+        sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      else
+        sudo yum install -y yum-utils
+        sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+        sudo yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      fi
+    start_cmd: "sudo systemctl start docker"
+    enable_cmd: "sudo systemctl enable docker"
+    user_group_cmd: "sudo usermod -aG docker $USER"
+    rootless_start_cmd: "systemctl --user start docker"
+    rootless_docs: "docs/CROSS_PLATFORM_PLAN.md"
+  
+  compose:
+    install_docs: "https://docs.docker.com/compose/install/linux/"
+    aava_docs: "docs/INSTALLATION.md"
+    # Compose is installed with docker-compose-plugin in the docker install
+    install_cmd: |
+      if command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y docker-compose-plugin
+      else
+        sudo yum install -y docker-compose-plugin
+      fi
+    upgrade_cmd: |
+      if command -v dnf >/dev/null 2>&1; then
+        sudo dnf update -y docker-compose-plugin
+      else
+        sudo yum update -y docker-compose-plugin
+      fi
+  
+  selinux:
+    present: true
+    aava_docs: "docs/INSTALLATION.md"
+    check_cmd: "getenforce"
+    tools_package: "policycoreutils-python-utils"
+    tools_install_cmd: |
+      if command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y policycoreutils-python-utils
+      else
+        sudo yum install -y policycoreutils-python-utils
+      fi
+    context_cmd: "sudo semanage fcontext -a -t container_file_t '{path}(/.*)?'"
+    restore_cmd: "sudo restorecon -Rv {path}"
+  
+  apparmor:
+    present: false
+  
+  firewall:
+    type: "firewalld"
+    aava_docs: "docs/INSTALLATION.md"
+    open_port_cmd: "sudo firewall-cmd --permanent --add-port={port}/tcp && sudo firewall-cmd --reload"
+    check_cmd: "sudo firewall-cmd --list-all"
+  
+  packages:
+    update_cmd: "sudo dnf check-update || true"
+    install_cmd: "sudo dnf install -y {packages}"
+  
+  paths:
+    asterisk_config:
+      - "/etc/asterisk"
+    asterisk_sounds:
+      - "/var/lib/asterisk/sounds"
+    media_default: "/mnt/asterisk_media/ai-generated"
+
+# =============================================================================
+# Rocky Linux
+# =============================================================================
+rocky:
+  inherit: rhel
+  name: "Rocky Linux"
+  
+  docker:
+    install_docs: "https://docs.docker.com/engine/install/centos/"
+
+# =============================================================================
+# AlmaLinux
+# =============================================================================
+almalinux:
+  inherit: rhel
+  name: "AlmaLinux"
+  
+  docker:
+    install_docs: "https://docs.docker.com/engine/install/centos/"
+
+# =============================================================================
+# Fedora
+# =============================================================================
+fedora:
+  inherit: rhel
+  name: "Fedora"
+  
+  # Fedora often uses rootless Docker by default
+  rootless_default: true
+  
+  docker:
+    install_docs: "https://docs.docker.com/engine/install/fedora/"
+    install_cmd: |
+      sudo dnf install -y moby-engine docker-compose
+    # Fedora uses moby-engine which may default to rootless
+    rootless_socket: "$XDG_RUNTIME_DIR/docker.sock"
+    rootless_note: "Fedora often defaults to rootless Docker. Check with: docker context ls"
+
+# =============================================================================
+# Sangoma / FreePBX
+# =============================================================================
+sangoma:
+  inherit: rhel
+  name: "Sangoma FreePBX"
+  os_ids:
+    - sangoma
+  
+  # Detection
+  detection_files:
+    - "/etc/sangoma/pbx"
+    - "/etc/freepbx.conf"
+  
+  freepbx:
+    reload_cmd: "fwconsole reload"
+    version_cmd: "fwconsole -V"
+    dialplan_file: "/etc/asterisk/extensions_custom.conf"
+    aava_docs: "docs/FreePBX-Integration-Guide.md"
+
+  # CentOS 7-based distros often don't have a usable docker-compose-plugin package;
+  # prefer the manual v2 install path to keep installs predictable.
+  compose:
+    install_docs: "https://docs.docker.com/compose/install/linux/"
+    aava_docs: "docs/INSTALLATION.md"
+    install_cmd: |
+      sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" -o /usr/local/bin/docker-compose
+      sudo chmod +x /usr/local/bin/docker-compose
+      sudo mkdir -p /usr/local/lib/docker/cli-plugins
+      sudo ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+    upgrade_cmd: |
+      sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" -o /usr/local/bin/docker-compose
+      sudo chmod +x /usr/local/bin/docker-compose
+      sudo mkdir -p /usr/local/lib/docker/cli-plugins
+      sudo ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+  
+  paths:
+    asterisk_config:
+      - "/etc/asterisk"
+    asterisk_sounds:
+      - "/var/lib/asterisk/sounds"
+    freepbx_web: "/var/www/html"
+    media_default: "/mnt/asterisk_media/ai-generated"
+
+# =============================================================================
+# Version Requirements
+# =============================================================================
+requirements:
+  docker:
+    minimum: "20.10"
+    recommended: "25.0"
+    minimum_api: "1.41"
+  
+  compose:
+    v1_eol: "2023-07-01"
+    v2_minimum: "2.20"
+    v2_recommended: "2.40.2"
+    # Versions below 2.40.2 have CVE-2025-62725
+    security_minimum: "2.40.2"
+  
+  architecture:
+    supported:
+      - "x86_64"
+    # ARM64 support deferred
+    unsupported:
+      - "i386"
+      - "i686"
+      - "armv7l"
+
+# =============================================================================
+# EOL Distributions (supported with warning)
+# =============================================================================
+eol_distributions:
+  - os_id: ubuntu
+    version: "18.04"
+    eol_date: "2023-04-01"
+    message: "Ubuntu 18.04 is EOL - consider upgrading to 22.04+"
+  
+  - os_id: ubuntu
+    version: "20.04"
+    eol_date: "2025-04-01"
+    message: "Ubuntu 20.04 standard support ended Apr 2025 (ESM continues) - consider upgrading"
+  
+  - os_id: debian
+    version: "9"
+    eol_date: "2022-06-30"
+    message: "Debian 9 is EOL - consider upgrading to 11+"
+  
+  - os_id: debian
+    version: "10"
+    eol_date: "2024-06-30"
+    message: "Debian 10 LTS ended Jun 2024 - consider upgrading"
+  
+  - os_id: centos
+    version: "7"
+    eol_date: "2024-06-30"
+    message: "CentOS 7 is EOL - consider migrating to Rocky/Alma"
+  
+  - os_id: centos
+    version: "8"
+    eol_date: "2021-12-31"
+    message: "CentOS 8 is EOL - consider migrating to Rocky/Alma"
+
+# =============================================================================
+# Port Configuration
+# =============================================================================
+ports:
+  admin_ui: 3003
+  ai_engine_http: 8080
+  audiosocket: 9092
+  external_media_rtp:
+    start: 10000
+    end: 10100

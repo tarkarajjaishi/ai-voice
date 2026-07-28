@@ -1,0 +1,74 @@
+# Documentation Index
+
+## User Documentation
+
+- **[Quick Start Guide](../README.md)** - Get started in 10 minutes
+- **[Installation and Upgrade Guide](INSTALLATION.md)** - Fresh setup, v7.5.2 upgrade steps, and older-installation updater recovery
+- **[Admin UI Guide](ADMIN_UI_GUIDE.md)** - Web interface for configuration and monitoring
+- **[FreePBX Integration Guide](FreePBX-Integration-Guide.md)** - Dialplan and queue configuration
+- **[Outbound Calling (Alpha)](OUTBOUND_CALLING.md)** - Scheduled outbound campaigns, voicemail drop, consent gate
+- **[VICIdial Remote Agents (Alpha)](Vicidial-Setup.md)** - VICIdial-owned campaigns routed to mapped AAVA Agents
+- **[Configuration Reference](Configuration-Reference.md)** - All settings explained
+- **[Caller Inactivity Watchdog](Configuration-Reference.md#caller-inactivity-no_input)** - 30-second inbound silence protection, per-agent overrides, and safe terminal playback (v7.3.1+)
+- **[Agents](AGENTS.md)** - v7.4 Agent routing, dialplan selection, and per-Agent tool access
+- **[v7.5.2 Validation Matrix](baselines/golden/v7.5.2-validation-matrix.md)** - 16 kHz AudioSocket, G.722 provider/pipeline calls, compatibility, and deployment evidence
+- **[v7.5.1 Validation Matrix](baselines/golden/v7.5.1-validation-matrix.md)** - hotfix automation, UI update, and runtime verification evidence
+- **[v7.4 Validation Matrix](baselines/golden/v7.4.0-validation-matrix.md)** - Agent migration and scoped-tools release evidence
+- **[Voice Selection](VOICE_SELECTION.md)** - Per-agent voices (v7.3.0+): precedence, per-provider behavior, troubleshooting
+- **[Tool Calling Guide](TOOL_CALLING_GUIDE.md)** - Using telephony and business tools
+- **[MCP Tool Integration](MCP_INTEGRATION.md)** - Experimental MCP tools (design + branch guide)
+- **[Troubleshooting Guide](TROUBLESHOOTING_GUIDE.md)** - Common issues and solutions
+- **[Migration Guide](MIGRATION.md)** - Upgrading between major versions
+- **[Operator Migration Guide](OPERATOR_MIGRATION.md)** - Contexts → Agents import, recovery, and rollback boundaries for v7.4
+
+## Provider Setup Guides
+
+- **[Google Live API Setup](Provider-Google-Setup.md)** - Gemini Live native-audio full-agent integration
+- **[Deepgram Voice Agent Setup](Provider-Deepgram-Setup.md)** - Deepgram all-in-one provider
+- **[OpenAI Realtime API Setup](Provider-OpenAI-Setup.md)** - OpenAI GA `gpt-realtime` full-agent integration
+- **[ElevenLabs Agent Setup](Provider-ElevenLabs-Setup.md)** - ElevenLabs Conversational AI with premium voices
+- **[xAI Grok Voice Agent Setup](Provider-Grok-Setup.md)** - Grok realtime full-agent provider (μ-law @ 8 kHz, server VAD, tools, and long-session guidance)
+- **[Telnyx AI Inference Setup](Provider-Telnyx-Setup.md)** - OpenAI-compatible LLM via Telnyx
+- **[Azure Speech Service Setup](Provider-Azure-Setup.md)** - Azure STT & TTS pipeline adapters
+- **[MiniMax LLM Setup](Provider-MiniMax-Setup.md)** - MiniMax M3 LLM via OpenAI-compatible API
+- **[Multi-Instance Full-Agent Providers](Multi-Instance-Full-Agent-Providers.md)** - Run multiple instances of the same provider type with isolated credentials
+
+## Local AI & GPU Setup
+
+- **[Fully Local Setup](LOCAL_ONLY_SETUP.md)** - Canonical guide: CPU-only, GPU, and split-server topologies
+- **[Ollama Setup](OLLAMA_SETUP.md)** - Self-hosted LLM via Ollama (no API key)
+- **[Local Profiles](LOCAL_PROFILES.md)** - Build profiles (local-core, local-full, local-gpu)
+- **[Hardware Requirements](HARDWARE_REQUIREMENTS.md)** - Specs, GPU sizing, cloud instance types
+
+## Operations & Production
+
+- **[Production Deployment](PRODUCTION_DEPLOYMENT.md)** - Security, networking, and best practices
+- **[Monitoring Guide](MONITORING_GUIDE.md)** - Observability and BYO Prometheus
+- **[Environment Variables](ENVIRONMENT_VARIABLES.md)** - `.env` reference (secrets + wiring)
+- **[Supported Platforms](SUPPORTED_PLATFORMS.md)** - Tiered OS support matrix
+- **[CLI Tools Reference](CLI_TOOLS_GUIDE.md)** - Agent command-line utilities
+
+## Developer Documentation
+
+- **[Contributing Guide](contributing/README.md)** - Start here for development
+- **[Developer Onboarding](DEVELOPER_ONBOARDING.md)** - Repo orientation, directory map, and first tasks
+- **[Quick Start for Devs](contributing/quickstart.md)** - Dev environment setup
+- **[Architecture Overview](contributing/architecture-quickstart.md)** - System design (10-minute read)
+- **[Architecture Deep Dive](contributing/architecture-deep-dive.md)** - Complete technical architecture
+- **[Common Pitfalls](contributing/COMMON_PITFALLS.md)** - Real issues and solutions
+- **[Milestones](contributing/milestones/)** - Development history and major features
+
+## Project Information
+
+- **[Roadmap](ROADMAP.md)** - What's next and how to contribute
+- **[Milestone History](MILESTONE_HISTORY.md)** - Completed milestones 1-24
+- **[Release Checklist](RELEASE_CHECKLIST.md)** - Manual golden-baseline gate
+- **[Changelog](../CHANGELOG.md)** - Version history and release notes
+- **[Security](../SECURITY.md)** - Security policy and vulnerability reporting
+- **[Contributing Guidelines](../CONTRIBUTING.md)** - Git workflow and PR process
+- **[Code of Conduct](../CODE_OF_CONDUCT.md)** - Community standards
+- **[Governance](../GOVERNANCE.md)** - Decision-making and feature proposals
+
+---
+
+**New to the project?** Start with the [Quick Start Guide](../README.md), then [Installation](INSTALLATION.md), then [FreePBX Integration](FreePBX-Integration-Guide.md).

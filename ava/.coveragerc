@@ -1,0 +1,38 @@
+# Coverage configuration for pytest-cov
+[run]
+source = src
+omit =
+    */tests/*
+    */test_*.py
+    */__pycache__/*
+    */site-packages/*
+    */venv/*
+    */ENV/*
+    */scripts/*
+
+[report]
+# Minimum coverage threshold: 60% initially
+# Plan to raise incrementally (65%, 70%, 75%, 80%)
+fail_under = 60
+precision = 2
+show_missing = True
+skip_covered = False
+exclude_lines =
+    # Have to re-enable the standard pragma
+    pragma: no cover
+    # Don't complain about missing debug-only code
+    def __repr__
+    # Don't complain if tests don't hit defensive assertion code
+    raise AssertionError
+    raise NotImplementedError
+    # Don't complain if non-runnable code isn't run
+    if __name__ == .__main__.:
+    # Don't complain about abstract methods
+    @abstractmethod
+    @abc.abstractmethod
+
+[html]
+directory = htmlcov
+
+[xml]
+output = coverage.xml

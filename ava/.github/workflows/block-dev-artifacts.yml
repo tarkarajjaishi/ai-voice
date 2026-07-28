@@ -1,0 +1,77 @@
+name: Block dev-only artifacts
+
+on:
+  pull_request:
+    branches: [staging, main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-dev-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check for dev-only files
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Files/dirs that must stay on the develop branch only.
+          # These are development artifacts (IDE rules, contributor guides,
+          # templates, AI assistant configs) that should never reach
+          # staging or main.
+          #
+          # Directory patterns use trailing / (prefix match).
+          # File patterns use $ (exact match) to avoid over-matching.
+          # NOTE: AVA.mdc and examples/ are intentionally NOT blocked — both
+          # ship on main. AVA.mdc is the public AI-assistant context file
+          # (reviewed each release per docs/RELEASE_CHECKLIST.md) and
+          # examples/ is linked from README and docs.
+          DEV_PATTERNS=(
+            "\.windsurf/"
+            "\.cursor/"
+            "\.agent/"
+            "Agents\.md$"
+            "CLAUDE\.md$"
+            "CLAUDE\.local\.md$"
+            "Gemini\.md$"
+            "docs/contributing/OPERATOR_CONTRIBUTOR_GUIDE\.md$"
+            "docs/contributing/CODING_GUIDELINES\.md$"
+            "docs/contributing/RECOGNITION\.md$"
+            "docs/contributing/VIDEO_WALKTHROUGH\.md$"
+            "docs/contributing/adding-full-agent-provider\.md$"
+            "docs/contributing/adding-pipeline-adapter\.md$"
+            "docs/contributing/pre-call-hooks-development\.md$"
+            "docs/contributing/in-call-hooks-development\.md$"
+            "docs/contributing/post-call-hooks-development\.md$"
+            "scripts/setup-contributor\.sh$"
+            "\.all-contributorsrc$"
+            "\.env\.contributor$"
+          )
+
+          # Only check added/modified files (allow deletions to clean up)
+          CHANGED=$(git diff --diff-filter=ACMR --name-only "origin/${BASE_REF}...HEAD")
+          BLOCKED=""
+
+          for pattern in "${DEV_PATTERNS[@]}"; do
+            MATCHES=$(echo "$CHANGED" | grep "^${pattern}" || true)
+            if [ -n "$MATCHES" ]; then
+              BLOCKED="${BLOCKED}${MATCHES}"$'\n'
+            fi
+          done
+
+          if [ -n "$BLOCKED" ]; then
+            echo "::error::Dev-only files detected in PR targeting ${BASE_REF}:"
+            echo "$BLOCKED"
+            echo ""
+            echo "These files must stay on the develop branch."
+            echo "Remove them from this PR or retarget to develop."
+            exit 1
+          fi
+
+          echo "✓ No dev-only artifacts found."

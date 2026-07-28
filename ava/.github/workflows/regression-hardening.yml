@@ -1,0 +1,166 @@
+name: Regression Hardening (staging/main)
+
+on:
+  push:
+    branches: [ main, staging ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python Test Matrix (extended)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Compile sources
+        run: |
+          python -m compileall -q .
+
+      - name: Run tests with coverage
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          pytest -v \
+            -k "not integration and not test_deepgram_stt_adapter_transcribes and not test_resolve_stream_targets and not test_output_rate_drift_adjusts_active_rate and not test_session_requests_g711_when_target_mulaw" \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-report=html \
+            --cov-report=json \
+            --cov-fail-under=26.5 \
+            --maxfail=10 \
+            --tb=short
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: regression-coverage-reports
+          path: |
+            coverage.xml
+            htmlcov/
+          retention-days: 30
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+
+          cov_path = pathlib.Path("coverage.json")
+          if not cov_path.exists():
+              raise SystemExit(0)
+
+          cov = json.loads(cov_path.read_text())["totals"]["percent_covered"]
+          line = (
+              f"📊 **Test Coverage: {cov:.2f}%**\n"
+              "✅ Threshold: 26.5% (baseline)\n"
+              "🎯 Target: 30% → 40%\n"
+          )
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as f:
+                  f.write(line)
+          else:
+              print(line)
+          PY
+
+  cli:
+    name: CLI Build & Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.22'
+          cache-dependency-path: cli/go.sum
+
+      - name: Go tests
+        working-directory: cli
+        run: |
+          go test ./...
+
+      - name: Go build
+        working-directory: cli
+        run: |
+          go build ./...
+
+  admin-ui:
+    name: Admin UI Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: admin_ui/frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: admin_ui/frontend
+        run: |
+          npm ci
+
+      - name: Run frontend tests
+        working-directory: admin_ui/frontend
+        run: |
+          npm run test
+
+      - name: Build frontend
+        working-directory: admin_ui/frontend
+        run: |
+          npm run build
+
+  docker-build:
+    name: Docker Builds (sanity)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build ai-engine image
+        run: docker build -t ai-engine:test .
+
+      - name: Build local-ai-server image (ci-min)
+        run: |
+          docker build -t local-ai-server:test ./local_ai_server \
+            --build-arg INCLUDE_VOSK=true \
+            --build-arg INCLUDE_SHERPA=false \
+            --build-arg INCLUDE_PIPER=true \
+            --build-arg INCLUDE_KOKORO=false \
+            --build-arg INCLUDE_LLAMA=true \
+            --build-arg INCLUDE_KROKO_EMBEDDED=false

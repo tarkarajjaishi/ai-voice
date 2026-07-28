@@ -1,0 +1,568 @@
+# Migration Guide
+
+This guide covers upgrading between major versions of Asterisk AI Voice Agent.
+
+## v7.5.1 to v7.5.2
+
+v7.5.2 is an in-place, backward-compatible audio release. It does not migrate
+databases, rewrite Agent assignments, or change the default Audio Profile.
+Existing Agents remain on their current 8 kHz behavior after upgrade.
+
+After upgrading:
+
+1. Rebuild and recreate `ai_engine`, `local_ai_server`, and `admin_ui` so the
+   engine, Local protocol, and profile controls use the same release.
+2. Verify the engine and Local AI health endpoints before returning calls to
+   service.
+3. Keep current PSTN/G.711 and ExternalMedia RTP Agents on
+   `telephony_ulaw_8k` or `telephony_enhanced_8k`.
+4. Opt in to `wideband_pcm_16k` only after confirming AudioSocket, a supported
+   Asterisk version (20.17+, 21.12+, 22.7+, or 23.1+), and a caller leg that
+   actually negotiates a wideband codec such as G.722.
+5. Make a controlled test call and confirm the Transport Card reports
+   `slin16@16000` before enabling additional Agents.
+
+Rollback requires no database action: assign the Agent back to an 8 kHz Audio
+Profile and apply the configuration. Local Kokoro can emit a truthful 16 kHz
+contract, but CPU latency is hardware-dependent; Piper is the validated Local
+TTS baseline for interactive calls.
+
+## v7.5.0 to v7.5.1
+
+v7.5.1 is an in-place hotfix with no database migration, audio-profile change,
+or provider-default change. Follow the normal tagged-release update procedure
+once the release is published.
+
+After upgrading:
+
+1. Recreate both `admin_ui` and `ai_engine` so the UI, API classification, and
+   runtime reconciliation use the same v7.5.1 code.
+2. Open **Tools & Capabilities**. Tool-only changes should show **Apply Changes**
+   and hot reload into a new immutable tool generation; they should not request
+   an AI Engine restart.
+3. Open **System → Environment**, save a harmless environment edit, and apply it
+   only when no calls are active. If replacement preparation or Compose fails,
+   the UI reports whether the previous service stayed available or was restored.
+4. Verify `ai_engine` health before returning the system to production traffic.
+
+Managed-tool `DELETE /api/tools/managed/{name}` now returns HTTP 200 with the
+deleted resource name and apply metadata instead of an empty HTTP 204 response.
+Clients that accepted any 2xx response remain compatible; clients pinned to 204
+must accept the structured 200 response.
+
+The transcript fix applies only to future OpenAI Realtime and Grok calls. It
+does not alter historical Call History records.
+
+## v7.4.1 to v7.5.0
+
+Released 2026-07-22. Follow the
+[v7.5.0 upgrade procedure](INSTALLATION.md#upgrade-to-v750-existing-checkout),
+including the local-change decision, Compose validation, backup, and post-update checks.
+
+### Audio transport and profiles
+
+- Existing Agents keep their assigned Audio Profile. The established
+  `telephony_ulaw_8k` profile retains compatibility downsampling behavior.
+- `telephony_enhanced_8k` is opt-in. Assign it per Agent to use stateful,
+  band-limited 16/24 kHz-to-8 kHz downsampling while preserving the existing
+  8 kHz Asterisk wire contract.
+- Hosted-provider and modular-pipeline output settings inherit the selected
+  per-call Audio Profile unless an explicit narrower override is configured.
+- Roll back the audio change by assigning the Agent back to
+  `telephony_ulaw_8k`; no database or transport migration is required.
+
+Review Agents after the upgrade and do not assume the enhanced profile was
+assigned automatically.
+
+The VICIdial integration now uses VICIdial's native Remote Agent lifecycle. VICIdial originates
+and owns customer calls; AAVA supplies the mapped AI conversation and requests terminal actions
+through the Agent and Non-Agent APIs.
+
+This replaces the experimental direct-origination setup that used
+`AAVA_OUTBOUND_PBX_TYPE=vicidial`, a VICIdial carrier context, and AAVA's own Call Scheduling
+campaign engine. That legacy value remains readable for one migration release, is hidden from
+new UI selection, and emits a startup warning. Do not rely on it beyond the next major release.
+
+### Before upgrading
+
+1. Back up `.env`, `data/operator/vicidial.db` if it already exists, the VICIdial database using
+   VICIdial's supported backup procedure, and the relevant Asterisk/FreePBX configuration.
+2. Record the existing VICIdial campaign, in-groups, statuses, carrier/DID routes, Remote Agent
+   users, Phone extension, SIP/RTP topology, and server timezone.
+3. Keep production carrier and DID routing under VICIdial. The new integration does not import,
+   replace, or directly modify those objects.
+
+### Migrate from direct origination
+
+1. Upgrade and rebuild/recreate `ai_engine` and `admin_ui` together.
+2. Create a dedicated least-privilege VICIdial API user and place its username/password in AAVA
+   environment variables.
+3. Create a dedicated VICIdial Phone, contiguous Remote Agent user range, and Remote Agent entry.
+4. Create the AAVA-facing FreePBX trunk/registration and verify at least two registration and
+   qualification cycles.
+5. In **Call Scheduling → VICIdial Remote Agents**, create the connection and mapping, then apply
+   the generated exact trusted dialplan context.
+6. Reproduce only valid VICIdial statuses, DNC/callback policy, and cold-transfer destinations in
+   the mapping allowlist. AAVA does not create missing production VICIdial statuses.
+7. Run one-line outbound and any configured inbound acceptance calls before enabling additional
+   lines. Verify VICIdial terminal records and Remote Agent return to `READY`, not only audio.
+8. After the Remote Agent path passes, change `AAVA_OUTBOUND_PBX_TYPE` to `freepbx` or `generic`
+   as appropriate and retire the old AAVA-native campaign that targeted VICIdial's carrier
+   dialplan.
+
+There is no automatic migration because the trusted SIP topology, VICIdial campaign ownership,
+API permissions, statuses, and compliance policies require operator verification. See
+[VICIdial Remote Agent Setup](Vicidial-Setup.md) for the complete setup and acceptance sequence.
+
+## v7.3.x to v7.4.0
+
+v7.4 removes Contexts as a product and runtime model. Agents in
+`data/operator/agents.db` are the only persona/routing source after startup.
+
+### Before upgrading
+
+1. Follow the [current upgrade procedure](INSTALLATION.md#upgrade-to-v750-existing-checkout),
+   including the documented older-installation updater recovery path.
+2. Back up `data/operator/agents.db`, `data/call_history.db`, `.env`, operator YAML,
+   `config/users.json`, and any legacy `config/contexts/` files.
+3. Record intentional tracked source changes and choose `retain`, `overwrite`, or
+   `abort`; v7.4 will not choose silently.
+
+### Contexts become Agents
+
+- On first AI Engine startup, a lock-protected compatibility bridge reads the merged
+  legacy Context configuration, validates the entire import, builds a temporary
+  database, performs an integrity check, and atomically installs it only when the
+  Agent store is empty.
+- A populated `agents.db` is never reseeded or overwritten. Invalid legacy data blocks
+  startup instead of producing a partial Agent set.
+- `/contexts` shows a one-time retirement notice and redirects operators to **Agents**.
+- `AI_CONTEXT` remains a deprecated display-name-first compatibility selector for old
+  dialplans. Change new and maintained dialplans to `AI_AGENT=<agent-slug>`.
+- Fresh installations receive Receptionist, Sales, and Support. Existing installations
+  are not replaced with those defaults.
+- The retired bundled `demo_project_expert` sample is excluded from migration so it
+  cannot become a fresh installation's default Agent. Rename an intentionally customized
+  copy before upgrading if it should be treated as operator configuration.
+
+See [Operator Migration](OPERATOR_MIGRATION.md) for import, recovery, and rollback details.
+
+### Tool inventory and Agent access
+
+Transfer destinations, Google calendars, Microsoft accounts/calendars, and voicemail
+destinations are configured globally under **Tools**. Access is then set on each Agent:
+
+- **Inherit** exposes the applicable global inventory.
+- **Allow selected** exposes only the selected resource keys.
+- **Deny** exposes none of that tool family.
+
+Legacy single-calendar/account and `tools.leave_voicemail.extension` configurations are
+materialized as a compatible `default` resource. Review every Agent after migration,
+especially Agents that previously used Context `tool_overrides`. A stale or empty allow
+list fails closed; a globally disabled tool cannot be enabled by an Agent.
+
+Tool names and Call History records are unchanged (`transfer_call`, calendar operations,
+and `leave_voicemail`), so existing Call History filters and reports remain compatible.
+
+### Save & Apply without restarting AI Engine
+
+**Tools → Save & Apply** validates and publishes a new immutable tool generation for new
+calls. Calls already in progress continue on their captured generation. If validation or
+generation construction fails, the last good generation keeps running.
+
+Provider, pipeline, VAD, streaming, environment/credential, Python-code, and MCP process
+changes still require the restart/reload action shown by their own page. Tool inventory
+reload does not imply those domains are hot-reloadable.
+
+### Required post-upgrade checks
+
+1. Confirm all expected Agents, prompts, providers/pipelines, and the default Agent.
+2. Review Agent access for the four scoped tool families.
+3. Save & Apply one harmless Tools edit and confirm the tool generation advances.
+4. Place a test call for at least one hosted provider and verify allowed tool execution.
+5. Confirm the call and canonical tool name appear in Call History.
+6. Run `agent check` and inspect recent `ai_engine` and `admin_ui` logs.
+
+## v7.3.1 to v7.3.2
+
+v7.3.2 is a stabilization-only patch with no required schema migration and no
+new provider additions. Existing provider keys, agent slugs, dialplan variables,
+and transport settings remain compatible.
+
+Notable upgrade behavior:
+
+- Named Grok instances inherit the canonical `grok` voice, audio, and
+  turn-detection settings before applying instance-specific credentials and
+  metadata. Add an explicit value on the named instance only when it should
+  intentionally differ from the canonical block.
+- Grok caller-inactivity announcements use xAI `force_message`; no operator
+  configuration change is required.
+- `on_provider_failure: dialplan_redirect` is opt-in. Existing installations
+  retain `announce_hangup` unless explicitly changed. Validate the redirect
+  context/extension/priority on the target PBX before enabling it.
+- Updater ownership, rollback, dirty-worktree handling, and validation retries
+  are hardened without changing the normal `agent update` or Admin UI workflow.
+
+Review the [v7.3.2 validation matrix](baselines/golden/v7.3.2-validation-matrix.md),
+take backups, and deploy the published `v7.3.2` tag rather than an untagged
+branch.
+
+## v7.x to v7.2.0
+
+**Fully back-compatible.** v7.2.0 is additive — no config, schema, or behavioral changes for existing deployments.
+
+### What's new (opt-in)
+
+- **Live-status hub** — the Admin UI dashboard now aggregates system component status via `/api/live-status` and `/api/live-status/stream` (SSE). No operator action required; the background probe loop starts automatically. Optionally set `LIVE_STATUS_PUSH_TOKEN` in `.env` to enable push updates from `ai_engine` and `local_ai_server` (see [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md#live-status-dashboard)).
+
+### Upgrade
+
+```bash
+git fetch --tags
+git checkout v7.2.0
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate admin_ui
+```
+
+## v6.4.2 to v6.5.x
+
+**Fully back-compatible.** v6.5.0, v6.5.1, v6.5.2, v6.5.3, and v6.5.4 are additive — no required config changes, no breaking schema changes, no behavioral changes for existing single-instance deployments. v6.5.2 does introduce one **breaking change for multi-instance deployments**: short provider aliases (`AI_PROVIDER=openai`, `AI_PROVIDER=google`, `provider: deepgram_agent`) are now rejected at config load — use exact provider instance keys instead. v6.5.3 is a **mandatory hotfix** for OpenAI Realtime users (OpenAI sunset the Beta API on 2026-05-12, so any deployment running v6.5.2 or earlier with OpenAI Realtime will fail until upgraded). v6.5.4 follows up by bringing all remaining code paths (Pydantic defaults, Admin UI templates, wizard backend, etc.) in line with the post-2026-05 GA reality — see "New in v6.5.4" below.
+
+```bash
+# Standard upgrade
+git fetch --tags
+git checkout v6.5.4
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+```
+
+New in v6.5.0 (opt-in):
+- **Local LLM tool-gated response (#368)** — new WS message types `tool_context` / `tool_result` v2 used automatically when local LLM is the active backend; no config changes for existing deployments.
+- **Deepgram Flux v2 + nova-3 default flip** — if you were relying on the implicit `nova-2` default in YAML, behavior is unchanged (the runtime hardcoded `nova-3` regardless of YAML before this flip). Only matters if you intentionally pinned `nova-2` in YAML.
+- **Gemini 3.1 Flash Live** — verified compatible, no engine changes. Model picker now offers `gemini-3.1-flash-live-preview` alongside the existing `gemini-2.5-*` options.
+- **HTTP-tool-test `.env`-first guard (#370)** — no migration; Admin UI Environment-page edits to `AAVA_HTTP_TOOL_TEST_*` now take effect without an `ai_engine` restart (was a bug, now fixed).
+
+New in v6.5.1 (opt-in):
+- **CPU-demo profile** — Faster-Whisper `tiny.en` + Piper + Qwen 0.5B is now selectable end-to-end via the Admin UI Models page. Pre-existing STT/TTS/LLM selections are unaffected.
+- **New env vars (all default-safe)** — `FASTER_WHISPER_DEVICE` (default `cpu`), `FASTER_WHISPER_COMPUTE_TYPE` (default `int8`), `LOCAL_ENABLE_FILLER_AUDIO` (default `false`), `LOCAL_LLM_STREAMING_TTS_OVERLAP` (default `true`). See [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md#local-ai-server-local-pipelines).
+- **Runtime toggles** — Filler Audio and LLM/TTS Overlap can be flipped from the Models page without a model reload (filler-audio enable triggers a quick TTS pre-synthesis; disable clears the cache).
+- **Local provider hot-path hardening** — internal change, no operator-visible config; if you observed audio glitching on `local_ai_server` reconnect events under v6.5.0, those should be fixed.
+
+New in v6.5.2:
+- **xAI Grok Voice Agent realtime provider (NEW)** — fifth full-agent realtime provider. Single-instance setup: set `XAI_API_KEY` in `.env` and add a `grok:` block to `config/ai-agent.yaml`. Multi-instance setup: create instances like `acme_grok` / `globex_grok` with `type: grok` and per-instance `api_key_file: /app/project/secrets/providers/<key>/api-key`. See [Provider-Grok-Setup.md](Provider-Grok-Setup.md) and [Multi-Instance-Full-Agent-Providers.md](Multi-Instance-Full-Agent-Providers.md). AAVA retains a conservative 28-minute warning from older xAI limits; xAI's current model page lists a 120-minute maximum session.
+- **Multi-instance full-agent providers (NEW)** — operators can now configure multiple instances of the same full-agent provider type with isolated credentials (e.g. `acme_google_live` + `globex_google_live` both using `type: google_live`). Single-instance YAML (legacy `openai_realtime:` / `google_live:` / `deepgram:` / `elevenlabs:` / `grok:` block where the YAML key equals the kind) continues to work unchanged.
+- **Per-instance credentials UX in Admin UI** — Add/Edit Provider modal exposes a uniform paste-style credentials uploader across all full-agent providers. Credential files are written under `/app/project/secrets/providers/<provider_key>/`. EnvPage adds a new "Per-Instance Provider Credentials" section that surfaces credential file presence per provider.
+- **Browser playback for `.ulaw` recordings** — the Call Details modal now plays compact `.ulaw` recordings (and uppercase `.WAV`, compressed WAV, and `.gsm` via `sox`) in addition to PCM `.wav`. New env var `AAVA_RECORDING_TRANSCODE_TIMEOUT_SEC` (default `120`) for the `sox` transcode timeout.
+- **Dashboard System Topology** — debounced indicators so transient probe blips don't flip dots red; ai_engine and local_ai_server probe timeouts bumped to 5s; provider cards grouped by type with multi-instance sub-rows; layout polish.
+- **HelpTooltip backfill (~260 inline tooltips)** — provider forms, Setup Wizard, LLM/MCP/Profiles/Models pages all gain inline help. Tooltip popovers are viewport-aware and flip to render below the trigger when the icon is near the top of a scrolled modal.
+
+**Breaking change in v6.5.2 (multi-instance deployments only):** Short provider aliases `AI_PROVIDER=openai`, `AI_PROVIDER=google`, and YAML `provider: deepgram_agent` are removed and now fail config validation instead of silently selecting an ambiguous provider when multiple provider instances exist.
+
+| Old (rejected) | New (required) |
+|---|---|
+| `AI_PROVIDER=openai` | `AI_PROVIDER=openai_realtime` |
+| `AI_PROVIDER=google` | `AI_PROVIDER=google_live` |
+| `provider: deepgram_agent` | `provider: deepgram` |
+
+Single-instance deployments using the canonical block names (`openai_realtime:` / `google_live:` / `deepgram:` / `elevenlabs:` / `grok:` where the YAML key equals the kind) are unaffected — only the short aliases are rejected. Audit your Asterisk dialplan `Set(AI_PROVIDER=…)` lines and any `contexts.<name>.provider:` YAML keys before upgrading.
+
+No removed config options outside the alias removal above. No required schema migrations. No required Docker volume migrations.
+
+New in v6.5.4 (OpenAI Realtime GA cleanup follow-up to v6.5.3):
+- **Pydantic defaults** in `src/config.py` now default OpenAI Realtime to `api_version: ga` + `model: gpt-realtime`. Fresh wizard installs no longer create broken configs.
+- **Admin UI "Add Provider" template** for OpenAI Realtime seeds GA defaults. The model dropdown removes the 5 sunset preview options and exposes 3 new GA models (`gpt-realtime-1.5`, `gpt-realtime-2`, `gpt-realtime-mini`).
+- **Legacy preview values in operator YAML** render in a "Custom (legacy — will not connect)" optgroup with a yellow warning banner — operators can see at a glance which provider configs are broken by the OpenAI sunset, without us auto-rewriting their YAML.
+- **Engine warning**: one-shot log line when `api_version: beta` is detected (gated by an instance flag so it fires exactly once per provider lifetime, not per reconnect attempt). This makes the cause of OpenAI's `beta_api_shape_disabled` rejection unambiguous in logs.
+- **No new required action for operators**: if you already migrated per the v6.5.3 notes, v6.5.4 is a no-op for your running config. If you're still on a sunset preview model pinned in `ai-agent.local.yaml`, the Admin UI now shows you which provider is broken; switch the model to `gpt-realtime` (or another GA option) per `docs/Provider-OpenAI-Setup.md`.
+
+New in v6.5.3 (hotfix — mandatory for OpenAI Realtime users):
+- **OpenAI Realtime: GA API + `gpt-realtime` model are now the shipped defaults.** OpenAI sunset the Realtime Beta API on 2026-05-12 and removed `gpt-4o-realtime-preview-2024-12-17` on 2026-05-07. The shipped `config/ai-agent.yaml` previously pinned `api_version: beta` + that preview model; v6.5.3 flips them to `api_version: ga` + `model: gpt-realtime`.
+- **Action required for operators with explicit overrides:** if your `config/ai-agent.local.yaml` (or any custom config) pins `api_version: beta` or `model: gpt-4o-realtime-preview-2024-12-17` (or any other `gpt-4o-realtime-preview-*` snapshot), **remove that override** or update it to GA — OpenAI returns `error.code: beta_api_shape_disabled` and closes the WebSocket otherwise.
+- No code change. The provider's GA wire-protocol path has shipped since v6.0.0.
+- Refs: [OpenAI deprecations](https://developers.openai.com/api/docs/deprecations), [gpt-realtime model](https://platform.openai.com/docs/models/gpt-realtime).
+
+## v6.4.1 to v6.4.2
+
+**Mostly back-compatible.** New features are additive or opt-in. A handful of
+Google Calendar default-value changes affect operators who relied on the
+previous backend defaults; explicit YAML configs are unchanged.
+
+```bash
+# Standard upgrade
+git pull
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+```
+
+New in v6.4.2:
+- **Microsoft Calendar V1 (NEW)** — Outlook / Microsoft 365 calendar integration via device-code OAuth. Opt-in: configure under `tools.microsoft_calendar.accounts.default` and bind to a context via `contexts.<name>.tool_overrides.microsoft_calendar.selected_accounts`. Setup guide: [docs/Microsoft-calendar-tool.md](Microsoft-calendar-tool.md).
+- **Google Calendar — major overhaul**
+  - Multi-account / per-context binding (#338): legacy single-calendar root fields still work as a fallback materialized as `calendars.default`. New nested shape: `tools.google_calendar.calendars.<key>.{credentials_path, calendar_id, timezone, subject?}`.
+  - JSON upload + auto-discover from the Tools UI.
+  - Domain-Wide Delegation support via optional `subject` per calendar.
+  - Tools UI Verify with distinct error codes (`forbidden_calendar`, `calendar_not_found`, `auth_failed`, `dwd_not_configured`, etc.).
+  - Native free/busy mode: blank/absent `free_prefix` switches to `freebusy.query()` intersected with a working-hours mask.
+- **Reschedule reliability across all providers** — server-side `event_id` resolution + 400/404 fallback for both Google and Microsoft Calendar tools.
+- **Date/time prompt placeholders** — `{today}`, `{current_date}`, `{current_weekday}`, `{current_time}`, `{current_datetime_iso}` resolved per-call inside `_apply_prompt_template_substitution`.
+- **Google Live — full 30-voice catalog** in the Admin UI voice picker (#349).
+
+Bug fixes that may change observable behavior:
+- **OpenAI Realtime — duplicate events (3x) on fast tools** — fast tools no longer create duplicate calendar bookings. Race-condition fix between fast tool execution and `response.done` commit.
+- **Per-context `tool_overrides` now actually take effect** on OpenAI Realtime, Deepgram, and Google Live (was silently ignored — only ElevenLabs honored it). If you have `selected_calendars`, custom transfer destinations, or webhook URLs configured per-context, they will now apply on the next call.
+
+### Behavior changes operators should review
+
+Google Calendar default-value changes — operators with explicit YAML keep their
+existing values; those relying on backend defaults will see new behavior. Full
+detail in [CHANGELOG.md](../CHANGELOG.md) under *Migration notes
+(calendar-improvements branch)*. Quick summary:
+
+| Setting | Old default | New default | If you want old behavior |
+|---|---|---|---|
+| `tools.google_calendar.min_slot_duration_minutes` | 15 | 30 | Set explicitly to `15` |
+| `tools.google_calendar.max_slots_returned` | (unbounded) | 3 | Set to `0` to disable cap |
+| `tools.google_calendar.max_event_duration_minutes` | (unbounded) | 240 | Set to `0` to disable cap |
+| `tools.google_calendar.free_prefix` blank/absent | title-prefix mode (default `'Open'`) | native free/busy + working-hours mask | Set `free_prefix: 'Open'` (or any non-empty string) explicitly |
+
+The slot-list message format and `create_event` success message have been
+extended (extra timezone/duration/event_id guidance) but the legacy `"Free
+slot starts:"` and `"Event created"` prefixes are preserved verbatim, so
+prompt templates that pattern-match on those substrings keep working.
+
+To stay on exact pre-PR behavior:
+
+```yaml
+tools:
+  google_calendar:
+    free_prefix: Open                  # keep title-prefix mode
+    busy_prefix: Busy                  # keep busy-block scanning
+    min_slot_duration_minutes: 15      # restore pre-6.4.2 slot grid
+    max_slots_returned: 0              # disable slot cap (return all)
+    max_event_duration_minutes: 0      # disable duration cap
+```
+
+## v6.4.0 to v6.4.1
+
+**No breaking changes.** All new features are additive or opt-in.
+
+```bash
+# Standard upgrade
+git pull
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+```
+
+New in v6.4.1:
+- CPU latency optimization (streaming LLM→TTS overlap, pipeline filler audio)
+- Qwen 2.5-1.5B Instruct as recommended CPU LLM (~15-30 tok/s vs Phi-3's ~0.8 tok/s)
+- Direct PCM→µ-law conversion in all 5 TTS backends (eliminates WAV roundtrip)
+- TTS phrase cache (LRU, 256 entries) — opt-in via `LOCAL_TTS_PHRASE_CACHE_ENABLED=true`
+- LLM streaming in Local AI Server and OpenAI LLM adapter
+- Admin UI Latency Optimization settings on Streaming page
+- Preflight hardening: GPU install gated behind `--apply-fixes`, Buildx detection, RAM/disk/network checks, all runtime ports validated
+
+To enable the new TTS phrase cache:
+```bash
+# In .env
+LOCAL_TTS_PHRASE_CACHE_ENABLED=true
+```
+
+## v6.3.2 to v6.4.0
+
+**No breaking changes.** All new features are additive or opt-in.
+
+```bash
+# Standard upgrade
+git pull
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+```
+
+New in v6.4.0:
+- Attended transfer streaming & screening modes (`basic_tts`, `ai_briefing`, `caller_recording`)
+- Sherpa offline STT with VAD-gated transducer mode (`SHERPA_MODEL_TYPE=offline`)
+- T-one STT backend for Russian telephony ASR (`LOCAL_STT_BACKEND=tone`)
+- Silero TTS backend with multi-language support (`LOCAL_TTS_BACKEND=silero`)
+- HTTP tool JSONPath `[*]` wildcard array extraction
+- Per-message conversation timestamps in Call Log UI
+- Fullscreen toggle for dashboard panels
+- Provider-agnostic runtime tool guidance for transfer targets
+- Live Agents UI redesign with auto-polling
+
+If you want the new Russian speech backends, rebuild with build args:
+```bash
+# T-one STT (Russian)
+docker compose build --build-arg INCLUDE_TONE=true local_ai_server
+
+# Silero TTS (Russian + multi-language)
+docker compose build --build-arg INCLUDE_SILERO=true local_ai_server
+
+# Both
+docker compose build --build-arg INCLUDE_TONE=true --build-arg INCLUDE_SILERO=true local_ai_server
+```
+
+Deprecated configs (still functional, will be removed in a future release):
+- `tools.attended_transfer.ai_summary` → use `screening_mode: ai_briefing`
+- `tools.attended_transfer.pass_caller_info_to_context` → use `screening_mode: basic_tts`
+- `transfer_call` / `transfer_to_queue` legacy tools → use unified `blind_transfer`
+
+## v6.3.1 to v6.3.2
+
+**No breaking changes.** All new features are additive or opt-in.
+
+```bash
+# Standard upgrade
+git pull
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+```
+
+New in v6.3.2:
+- Microsoft Azure Speech Service STT & TTS pipeline adapters (REST batch, WebSocket streaming, SSML synthesis)
+- MiniMax LLM M2.7 pipeline adapter via OpenAI-compatible API
+- Call Recording Playback in Admin UI Call Details modal
+- Google Calendar delete() with timezone fixes
+- Azure SSRF prevention, PII logging discipline, input validation hardening
+
+## v6.2.x to v6.3.1
+
+**No breaking changes.** All new features are additive or opt-in.
+
+```bash
+# Standard upgrade
+git pull
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+```
+
+New in v6.3.1:
+- Local AI Server: backend enable/rebuild flow, expanded model catalog, GGUF validation, checksum sidecars
+- GPU ergonomics: `LOCAL_LLM_GPU_LAYERS=-1` auto-detection, GPU compose overlay improvements
+- CPU-first onboarding: defaults to `runtime_mode=minimal` on CPU-only hosts
+- Security hardening: path traversal protection, concurrent rebuild race fix, active-call guard on model switch
+- Structured local tool gateway with hangup guardrails
+- CLI `agent check --local` / `--remote` for Local AI Server validation
+- New STT backends: Whisper.cpp (`LOCAL_STT_BACKEND=whisper_cpp`)
+- New TTS backend: MeloTTS (`LOCAL_TTS_BACKEND=melotts`)
+
+If you use `local_ai_server` with optional backends, rebuild to pick up new capabilities:
+```bash
+docker compose build --build-arg INCLUDE_FASTER_WHISPER=true --build-arg INCLUDE_WHISPER_CPP=true local_ai_server
+```
+
+## v6.1.1 to v6.2.0
+
+**No breaking changes.** All new features are additive or opt-in.
+
+```bash
+# Standard upgrade
+git pull
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+```
+
+New in v6.2.0:
+- NumPy audio resampler replaces legacy `audioop.ratecv` (fixes crackling)
+- Google Live native audio latest model support (`gemini-2.5-flash-native-audio-latest`)
+- Google Live VAD tuning, TTS gating, farewell/hangup hardening
+- Telnyx AI Inference LLM pipeline provider (`telnyx_llm`)
+- Agent CLI `check --fix` auto-repair
+- Admin UI tool catalog and Google Live settings
+- 13 call termination fixes across all providers
+
+## v6.0.0 to v6.1.1
+
+**No breaking changes.** All new features are additive or opt-in.
+
+```bash
+# Standard upgrade
+git pull
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+```
+
+New in v6.1.1:
+- Operator config overrides via `config/ai-agent.local.yaml` (optional, git-ignored)
+- Live agent transfer tool (opt-in via tool allowlist)
+- Experimental ViciDial outbound dialer configuration notes (opt-in via `.env`)
+
+## v5.x to v6.0.0
+
+### Breaking Changes
+
+1. **OpenAI Realtime API version default changed to GA**
+   - The default `api_version` is now `ga` (was `beta`)
+   - GA uses nested audio schema (`audio.input.format` / `audio.output.format` with MIME types)
+   - **To keep old behavior**: Set `api_version: beta` explicitly in your provider config
+
+2. **Email template autoescaping enabled**
+   - `template_renderer.py` now uses `autoescape=True` by default
+   - Custom HTML templates that use raw HTML variables need Jinja2's `| safe` filter
+
+### Upgrade Steps
+
+```bash
+# 1. Backup your configuration
+cp .env .env.backup
+cp config/ai-agent.yaml config/ai-agent.yaml.backup
+
+# 2. Pull the latest code
+git pull
+
+# 3. Run preflight to update environment
+sudo ./preflight.sh --apply-fixes
+
+# 4. Rebuild and restart all containers
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+
+# 5. Verify health
+curl http://localhost:15000/health
+agent check
+```
+
+If you were using `api_version: beta` explicitly, no OpenAI changes are needed. If you relied on the default, review your OpenAI provider config.
+
+## v4.x to v6.0.0
+
+### Major Changes
+
+- **Config schema v4**: Milestone 13 migrated configuration format. Run `scripts/migrate_config_v4.py --dry-run` to preview changes, then `--apply` to migrate.
+- **Diagnostic settings moved to `.env`**: Settings like `DIAG_EGRESS_SWAP_MODE`, `DIAG_ENABLE_TAPS`, and `STREAMING_LOG_LEVEL` are now environment variables, not YAML keys.
+- **Prometheus/Grafana removed**: The monitoring stack is no longer shipped. Use Admin UI Call History for per-call debugging and bring your own Prometheus if needed.
+- **Admin UI added**: Web interface on port 3003 for configuration and monitoring.
+- **Multiple new providers**: Google Live, ElevenLabs Agent added since v4.x.
+- **Tool calling system**: Unified tool framework with telephony and business tools.
+
+### Upgrade Steps
+
+```bash
+# 1. Backup everything
+cp -r config/ config.backup/
+cp .env .env.backup
+
+# 2. Pull the latest code
+git pull
+
+# 3. Run config migration (preview first)
+python scripts/migrate_config_v4.py --dry-run
+python scripts/migrate_config_v4.py --apply
+
+# 4. Run preflight
+sudo ./preflight.sh --apply-fixes
+
+# 5. Rebuild containers
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate
+
+# 6. Verify
+agent check
+curl http://localhost:15000/health
+```
+
+### Post-Migration
+
+- Access Admin UI at `http://localhost:3003` (first-run password is printed to the admin_ui logs: `docker compose -p asterisk-ai-voice-agent logs admin_ui | grep -i password`; you'll be required to change it at first login)
+- Review your provider configuration in the Admin UI Setup Wizard
+- Check Call History for your first test call to verify everything works
+
+## General Upgrade Procedure
+
+For any version upgrade:
+
+1. **Backup** your `.env`, `config/ai-agent.yaml`, and `config/ai-agent.local.yaml`
+2. **Pull** the latest code: `git pull` (or use `agent update` which handles backup/restore automatically)
+3. **Run preflight**: `sudo ./preflight.sh --apply-fixes`
+4. **Rebuild**: `docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate`
+5. **Verify**: `agent check` and make a test call
+
+For detailed release notes, see [CHANGELOG.md](../CHANGELOG.md).

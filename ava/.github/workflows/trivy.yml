@@ -1,0 +1,146 @@
+# Trivy Docker Image Security Scanning - AAVA-36
+# Scans Docker images for vulnerabilities in OS packages and dependencies
+# Results uploaded to GitHub Security tab
+
+name: "Trivy"
+
+on:
+  push:
+    branches: [ "main", "staging" ]
+    paths:
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'local_ai_server/Dockerfile'
+      - 'local_ai_server/Dockerfile.gpu'
+      - 'local_ai_server/requirements*.txt'
+      - '.github/workflows/trivy.yml'
+  pull_request:
+    branches: [ "main", "staging" ]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'local_ai_server/Dockerfile'
+      - 'local_ai_server/Dockerfile.gpu'
+      - 'local_ai_server/requirements*.txt'
+      - '.github/workflows/trivy.yml'
+  schedule:
+    # Run weekly on Monday at 7am UTC (after CodeQL)
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Scan Docker Image
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'full-ci') ||
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Build ai-engine image
+      run: docker build -t ai-engine:${{ github.sha }} .
+
+    # PR/branch scanning uses a minimal local-ai-server build to keep scans fast and
+    # avoid exceeding GitHub runner disk limits. A fuller scan runs on the schedule.
+    - name: Build local-ai-server image (ci-min)
+      if: github.event_name != 'schedule'
+      run: |
+        docker build -t local-ai-server:${{ github.sha }} ./local_ai_server \
+          --build-arg INCLUDE_VOSK=true \
+          --build-arg INCLUDE_SHERPA=false \
+          --build-arg INCLUDE_PIPER=true \
+          --build-arg INCLUDE_KOKORO=false \
+          --build-arg INCLUDE_LLAMA=true \
+          --build-arg INCLUDE_KROKO_EMBEDDED=false
+
+    - name: Build local-ai-server image (full, scheduled)
+      if: github.event_name == 'schedule'
+      run: docker build -t local-ai-server-full:${{ github.sha }} ./local_ai_server
+
+    - name: Scan ai-engine image
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        image-ref: 'ai-engine:${{ github.sha }}'
+        format: 'sarif'
+        output: 'trivy-ai-engine.sarif'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+        vuln-type: 'os,library'
+        scanners: 'vuln,secret,config'
+        exit-code: '0'
+        ignore-unfixed: true
+        timeout: '15m'
+
+    - name: Scan local-ai-server image
+      if: github.event_name != 'schedule'
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        image-ref: 'local-ai-server:${{ github.sha }}'
+        format: 'sarif'
+        output: 'trivy-local-ai-server.sarif'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+        vuln-type: 'os,library'
+        scanners: 'vuln,secret,config'
+        exit-code: '0'
+        ignore-unfixed: true
+        timeout: '15m'
+
+    - name: Scan local-ai-server image (full, scheduled)
+      if: github.event_name == 'schedule'
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        image-ref: 'local-ai-server-full:${{ github.sha }}'
+        format: 'sarif'
+        output: 'trivy-local-ai-server-full.sarif'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+        vuln-type: 'os,library'
+        scanners: 'vuln,secret,config'
+        exit-code: '0'
+        ignore-unfixed: true
+        timeout: '30m'
+
+    - name: Upload ai-engine results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v4
+      if: always()
+      with:
+        sarif_file: 'trivy-ai-engine.sarif'
+        category: 'trivy-ai-engine'
+
+    - name: Upload local-ai-server results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v4
+      if: always() && github.event_name != 'schedule'
+      with:
+        sarif_file: 'trivy-local-ai-server.sarif'
+        category: 'trivy-local-ai-server'
+
+    - name: Upload local-ai-server full results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v4
+      if: github.event_name == 'schedule'
+      with:
+        sarif_file: 'trivy-local-ai-server-full.sarif'
+        category: 'trivy-local-ai-server-full'
+
+    - name: Upload Trivy results as artifact
+      uses: actions/upload-artifact@v7
+      if: always()
+      with:
+        name: trivy-results-${{ github.sha }}
+        path: |
+          trivy-ai-engine.sarif
+          trivy-local-ai-server.sarif
+          trivy-local-ai-server-full.sarif
+        retention-days: 30

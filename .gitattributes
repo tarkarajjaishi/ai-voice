@@ -1,0 +1,24 @@
+# Shell scripts MUST stay LF — they run on Linux (WSL / the on-prem Asterisk box).
+# Checked out on Windows with core.autocrlf=true they pick up CRLF, and a CRLF shebang
+# line fails with a bare "not found" that gives no hint why. Pin them here so no one's
+# local git config can break them.
+*.sh    text eol=lf
+*.bash  text eol=lf
+Makefile text eol=lf
+
+# Same reasoning for anything else consumed inside a container.
+Dockerfile      text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+.env.example    text eol=lf
+
+# Let git decide for everything else, and never touch binaries.
+*           text=auto
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.onnx      binary
+*.bin       binary
+*.wav       binary

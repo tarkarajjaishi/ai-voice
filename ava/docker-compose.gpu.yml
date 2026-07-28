@@ -1,0 +1,65 @@
+# docker-compose.gpu.yml - NVIDIA GPU Support Override
+#
+# AAVA-140: GPU passthrough for Local AI Server LLM acceleration
+#
+# Usage (only needed when using GPU for inference):
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build local_ai_server
+#
+# NOTE: GPU detection for Setup Wizard uses GPU_AVAILABLE from .env (set by preflight.sh).
+#       You do NOT need this file just for GPU detection - only for actual GPU inference.
+#
+# Prerequisites:
+#   1. NVIDIA GPU with drivers installed (nvidia-smi should work)
+#   2. nvidia-container-toolkit installed and configured
+#   3. Run preflight.sh to detect GPU and set GPU_AVAILABLE=true in .env
+#   4. Set LOCAL_LLM_GPU_LAYERS=-1 in .env to enable GPU offloading
+#
+# Installation (Debian/Ubuntu):
+#   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+#     sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+#   curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+#     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+#     sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+#   sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+#   sudo nvidia-ctk runtime configure --runtime=docker
+#   sudo systemctl restart docker
+#
+# Docs: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+
+services:
+  # Local AI Server needs GPU for LLM inference acceleration
+  # Uses dedicated Dockerfile.gpu to build CUDA-enabled llama.cpp
+  # Set LOCAL_LLM_GPU_LAYERS=-1 in .env to auto-use GPU
+  local_ai_server:
+    image: asterisk-ai-voice-agent-local-ai-server-gpu:latest
+    build:
+      context: ./local_ai_server
+      dockerfile: Dockerfile.gpu
+      network: host
+      args:
+        - INCLUDE_VOSK=${INCLUDE_VOSK:-true}
+        - INCLUDE_SHERPA=${INCLUDE_SHERPA:-true}
+        # On GPU builds, include Whisper backends by default so UI switching works out of the box.
+        - INCLUDE_FASTER_WHISPER=${INCLUDE_FASTER_WHISPER:-true}
+        - INCLUDE_WHISPER_CPP=${INCLUDE_WHISPER_CPP:-true}
+        - INCLUDE_TONE=${INCLUDE_TONE:-false}
+        - INCLUDE_PIPER=${INCLUDE_PIPER:-true}
+        - INCLUDE_KOKORO=${INCLUDE_KOKORO:-true}
+        - INCLUDE_MELOTTS=${INCLUDE_MELOTTS:-false}
+        - INCLUDE_SILERO=${INCLUDE_SILERO:-false}
+        - INCLUDE_LLAMA=${INCLUDE_LLAMA:-true}
+        # Optional semicolon-separated CMake CUDA architecture list (for
+        # example, 70 for Tesla V100). Unset preserves the portable build.
+        - LLAMA_CUDA_ARCHITECTURES=${LLAMA_CUDA_ARCHITECTURES:-}
+        - INCLUDE_KROKO_EMBEDDED=${INCLUDE_KROKO_EMBEDDED:-false}
+        # When INCLUDE_KROKO_EMBEDDED=true, you must also set KROKO_SERVER_SHA256 in .env
+        - KROKO_SERVER_SHA256=${KROKO_SERVER_SHA256:-}
+        # Optional override; defaults are pinned in Dockerfile.gpu
+        - ONNX_RUNTIME_SHA256=${ONNX_RUNTIME_SHA256:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

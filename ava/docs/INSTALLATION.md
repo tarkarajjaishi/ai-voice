@@ -1,0 +1,923 @@
+# Asterisk AI Voice Agent - Installation and Upgrade Guide (v7.5)
+
+This guide covers fresh installations and the supported upgrade path to v7.5.2.
+For release-specific behavior changes, also read the
+[v7.5.2 migration notes](MIGRATION.md#v751-to-v752). Operators upgrading from
+v7.3.x or earlier must also follow the [v7.4 Agent migration](MIGRATION.md#v73x-to-v740).
+
+## Three Setup Paths
+
+Choose the path that best fits your experience level:
+
+## Upgrade to v7.5.2 (Existing Checkout)
+
+This section is for operators upgrading an existing repo checkout (not a fresh install).
+
+> ### ⚠️ Upgrading from 6.x? v7.0.0 introduced breaking changes — read first
+> (v7.5 includes them; if you are already on 7.x this is an in-place upgrade.)
+> Before upgrading from 6.x, review the **Upgrade Notes** at the top of the
+> [v7.0.0 CHANGELOG entry](../CHANGELOG.md) and the
+> [Agents migration guide](OPERATOR_MIGRATION.md). In short:
+> - **Default `admin`/`admin` login is removed.** If your install was **still using `admin`/`admin`**,
+>   it is automatically rotated on first start to a one-time random password printed to the `admin_ui`
+>   logs (`docker compose -p asterisk-ai-voice-agent logs admin_ui | grep -i password`), which you must
+>   change at first login. **If you already changed the admin password, nothing changes — your existing
+>   login keeps working** and no new password is printed.
+> - **`/api/config/export` no longer bundles `.env`** by default (pass `include_secrets=true`).
+> - **Your contexts migrate into `agents.db`** on first v7.4 AI Engine start. Contexts are
+>   removed from runtime and navigation; manage personas in **Agents**. Existing dialplans
+>   keep working through the deprecated `AI_CONTEXT` compatibility selector, but new
+>   dialplans must use `AI_AGENT`. Do not delete `agents.db` as a rollback method; see the
+>   [operator migration rollback boundaries](OPERATOR_MIGRATION.md#rollback-boundaries).
+
+### 0) Record local changes and take a backup
+
+Run these commands from your actual checkout path. Do not assume it is `/root/...`:
+
+```bash
+cd /path/to/AVA-AI-Voice-Agent-for-Asterisk
+git status --short
+git diff --binary > ../aava-pre-v752-working-tree.patch
+git diff --binary --cached > ../aava-pre-v752-staged.patch
+docker compose config --quiet
+```
+
+Back up at least:
+
+- `.env`, `config/ai-agent.yaml`, `config/ai-agent.local.yaml`, and `config/users.json`;
+- custom files under `config/contexts/` while upgrading from a Context-based release;
+- `data/operator/agents.db` and `data/call_history.db` when present; and
+- any custom secrets, certificates, recordings, or media stored outside those paths.
+
+The v7.5 updater also creates a per-job backup under `.agent/update-backups/` and
+uses SQLite's online backup API for `agents.db` and `call_history.db`. An independent
+off-host backup is still recommended.
+
+### 1) Choose how to handle tracked source changes
+
+The updater never silently decides what to do with edits to tracked project files:
+
+| Choice | Use it when | Result |
+|---|---|---|
+| `retain` | You intentionally modified project source and want to reapply it | Changes are stashed and reapplied; a conflict stops safely and leaves the stash for recovery |
+| `overwrite` | The changes are accidental, generated, or already preserved elsewhere | Tracked source edits are discarded after the updater backup; operator configuration and databases are restored |
+| `abort` | You want to inspect or commit changes first | No update is applied |
+
+Untracked files are not overwritten by default. Review `git status --short` before
+choosing. If in doubt, choose `abort` and preserve the changes outside the checkout.
+
+### 2) Update using the v7.5 updater
+
+Preferred CLI path:
+
+```bash
+git fetch origin --prune --tags
+agent update --ref v7.5.2 --include-ui --local-changes=retain
+```
+
+Replace `retain` with your explicit `overwrite` or `abort` decision. In an interactive
+terminal, the default `ask` policy presents the same choices. Non-interactive runs must
+specify a policy.
+
+The Admin UI path is **System → Updates**. Preview the plan, select **Retain local
+changes**, **Overwrite local changes**, or **Abort**, then proceed. Use a published tag
+for production; untagged branches belong on development systems only.
+
+Leave **Update Admin UI** and **Update Agent CLI** enabled for a release upgrade. Before
+starting, verify that `docker compose config --quiet` succeeds as the checkout owner.
+Review any local `docker-compose.override.yml` carefully: Docker loads it automatically,
+but it is normally untracked, so the updater cannot validate its history or preserve it as
+release source. It must be readable by the checkout owner and must not reference a temporary
+test checkout.
+
+#### Update planner recovery, including issue [#518](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues/518)
+
+Older installations, and checkouts with ownership left over from an older root-run
+update, can show `Failed to compute update plan`. Fixed Admin UI releases print the
+updater's exact stderr followed by host-CLI recovery commands. The common causes are a
+stale cached updater image, mixed checkout/`.git` ownership, a checkout mounted below
+`/root` that the updater's non-root user cannot traverse, or tracked local edits that the
+old UI did not surface.
+
+Run the host recovery script from an SSH shell on the AAVA server. This path does not
+depend on the failing Admin UI planner container:
+
+```bash
+AAVA_RECOVERY_REF=v7.5.2
+AAVA_REPO=/path/to/AVA-AI-Voice-Agent-for-Asterisk
+AAVA_RECOVERY_STATUS=0
+AAVA_RECOVERY_SCRIPT="$(mktemp)" &&
+  curl -fsSL "https://raw.githubusercontent.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/${AAVA_RECOVERY_REF}/scripts/update-recover.sh" -o "${AAVA_RECOVERY_SCRIPT}" &&
+  sudo bash "${AAVA_RECOVERY_SCRIPT}" --repo "${AAVA_REPO}" --ref "${AAVA_RECOVERY_REF}" --include-ui
+AAVA_RECOVERY_STATUS=$?
+rm -f "${AAVA_RECOVERY_SCRIPT:-}"
+( exit "${AAVA_RECOVERY_STATUS}" )
+```
+
+The script supports Ubuntu/Debian and RHEL/CentOS-style Linux AAVA hosts and
+requires host `python3` for bounded ownership repair. Install it first if this is
+a minimal host (`sudo apt-get install -y python3`, `sudo dnf install -y python3`,
+or `sudo yum install -y python3`). It may first
+repair `.git` and Git-tracked path ownership so the checkout owner can inspect the
+repository safely, including tracked files left root-owned by older update attempts. It
+then captures diagnostics, binary-safe tracked-change patches, and a best-effort
+pre-update copy of operator config/data under `/var/tmp/aava-update-recovery-*` before
+updater-state repair or update. The `agent update` command still creates its normal
+update backup and SQLite snapshots during the actual upgrade.
+
+If tracked local source-code edits are present, the script asks what to do in the SSH
+terminal:
+
+- `retain`: stash tracked local edits and reapply them after the update. This preserves
+  local code where possible, but conflicts can still require manual resolution.
+- `overwrite`: discard tracked source-code edits after preserving patches in the
+  recovery directory. Use this only when you accept losing local code modifications.
+- `abort`: stop before applying an update. The script may already have made the
+  checkout owner able to traverse the checkout path and read `.git` plus tracked-file
+  metadata so it can make that decision safely.
+
+For non-interactive recovery, pass the decision explicitly:
+
+```bash
+AAVA_RECOVERY_REF=v7.5.2
+AAVA_REPO=/path/to/AVA-AI-Voice-Agent-for-Asterisk
+AAVA_RECOVERY_STATUS=0
+AAVA_RECOVERY_SCRIPT="$(mktemp)" &&
+  curl -fsSL "https://raw.githubusercontent.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/${AAVA_RECOVERY_REF}/scripts/update-recover.sh" -o "${AAVA_RECOVERY_SCRIPT}" &&
+  sudo bash "${AAVA_RECOVERY_SCRIPT}" --repo "${AAVA_REPO}" --ref "${AAVA_RECOVERY_REF}" --include-ui --local-changes retain --yes
+AAVA_RECOVERY_STATUS=$?
+rm -f "${AAVA_RECOVERY_SCRIPT:-}"
+( exit "${AAVA_RECOVERY_STATUS}" )
+```
+
+Use `overwrite` only when the operator accepts that tracked local code changes will be
+discarded:
+
+```bash
+AAVA_RECOVERY_REF=v7.5.2
+AAVA_REPO=/path/to/AVA-AI-Voice-Agent-for-Asterisk
+AAVA_RECOVERY_STATUS=0
+AAVA_RECOVERY_SCRIPT="$(mktemp)" &&
+  curl -fsSL "https://raw.githubusercontent.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/${AAVA_RECOVERY_REF}/scripts/update-recover.sh" -o "${AAVA_RECOVERY_SCRIPT}" &&
+  sudo bash "${AAVA_RECOVERY_SCRIPT}" --repo "${AAVA_REPO}" --ref "${AAVA_RECOVERY_REF}" --include-ui --local-changes overwrite
+AAVA_RECOVERY_STATUS=$?
+rm -f "${AAVA_RECOVERY_SCRIPT:-}"
+( exit "${AAVA_RECOVERY_STATUS}" )
+```
+
+Untracked files are left alone by default. If Git reports that untracked files would be
+overwritten by checkout or merge, inspect them first. Use `--stash-untracked` only with
+`--local-changes retain`; it is rejected with `overwrite` because overwrite mode is for
+discarding local source edits, and the underlying updater would clean untracked files.
+
+For `main` or an advanced branch target, the script does not substitute the latest
+published CLI. It resolves the checkout's configured remote, clones the exact selected
+ref into a temporary directory, builds that ref's CLI with the project Go container, and
+uses that binary for recovery. Published release tags use the published release CLI.
+
+The script repairs only `.git`, `.agent`, and Git-tracked files/parents. It does not
+recursively `chown` the whole checkout, because production checkouts can legitimately
+contain runtime files owned by Asterisk or another service account. If Git metadata is
+linked outside the checkout, `.agent` is a symlink, a tracked parent is a symlink, or
+the checkout owner cannot be determined, the script stops before updater-state repair
+or update. If Git reports *dubious ownership*, add only this checkout as safe using the
+path printed by Git; `safe.directory` does not fix a real write-permission failure:
+
+```bash
+git config --global --add safe.directory "$(pwd)"
+
+# Use the same identity that will run the recovery command. If that is root:
+sudo git config --global --add safe.directory "$(pwd)"
+```
+
+The recovery script runs the updater as the checkout owner. If that account cannot
+access the Docker socket, the script stops with a remediation message instead of
+temporarily granting Docker access. Add the checkout owner to the Docker socket group,
+restart the login/service session so group membership is visible, then rerun recovery.
+
+#### If the host `agent` CLI recovery also fails
+
+First confirm that the command being executed is the newly bootstrapped CLI, not an
+older binary earlier in `PATH`:
+
+```bash
+command -v agent || true
+/usr/local/bin/agent version
+```
+
+Use the exact failure to choose the next safe action:
+
+| CLI output | Recovery |
+|---|---|
+| `unknown flag: --local-changes` | The old CLI is still running. Re-run the pinned `update-recover.sh` command above so it installs the selected release CLI, then invoke `/usr/local/bin/agent` by absolute path if manual recovery is still needed. |
+| `detected dubious ownership` | Add only the current checkout to `safe.directory` for the same user that runs `agent`; this is a trust check, not a permissions repair. |
+| `.git/FETCH_HEAD: Permission denied` or another `.git` write failure | Re-run the pinned `update-recover.sh` command above and keep the generated `/var/tmp/aava-update-recovery-*` directory. Do not run the CLI directly as root or recursively change ownership. |
+| `working tree has local changes` or `local-change policy` | Re-run with an explicit `--local-changes=retain`, `overwrite`, or `abort`; use `retain` unless the tracked edits are already preserved and intentionally disposable. |
+| merge, index, or stash conflict | Follow the conflict procedure below before retrying. Do not delete the stash or use `git reset --hard`. |
+| Docker image or Compose failure | Keep the updater backup and follow the service-specific recovery below; do not delete operator databases. |
+
+To capture the full CLI error for support or an issue, keep the recovery directory
+printed by the script. It contains the attempted plan, stderr, full update log,
+Git status, and pre-update preservation files:
+
+```bash
+sudo find /var/tmp -maxdepth 1 -type d -name 'aava-update-recovery-*' | sort | tail -n 3
+```
+
+The CLI creates its backup before changing the checkout. If the command reports a
+backup path, recovery directory, or preserved stash, include those paths in the support
+report but do not upload `.env`, database files, credentials, or other secrets.
+
+#### If an earlier update left a merge or stash conflict
+
+Do not delete the repository, `agents.db`, or the stash. First capture the state:
+
+```bash
+git status
+git stash list
+git diff > ../aava-update-conflict.patch
+```
+
+Resolve and commit the conflict if the changes are wanted. If you intentionally choose
+to abandon the interrupted merge, `git merge --abort` is the first recovery action.
+When Git says no merge is active but the index is still conflicted, preserve the patch
+and stash before using `git reset --merge HEAD`. Then rerun the v7.5 updater with an
+explicit policy. Never use `git reset --hard` as generic upgrade advice.
+
+#### If Git updated but Docker deployment failed
+
+Do not treat a second update run as proof that the containers were updated. If the first
+job reached **Fast-forwarding code** and then failed during Docker Compose, the checkout may
+already be at v7.5.2 while the old containers are still running. Save the failed job log and
+either use its **Rollback** action or, after fixing the reported Compose/build error, reconcile
+only the services that were running before the update:
+
+```bash
+cd /path/to/AVA-AI-Voice-Agent-for-Asterisk
+docker compose config --quiet
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate ai_engine admin_ui
+
+# Only when Local AI was already in use before the update:
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate local_ai_server
+
+agent check
+```
+
+This manual recovery is required because a retry at the target Git commit may have no
+remaining source diff from which to reconstruct the failed Docker action plan.
+
+#### If the update fails with “No such image: ...local-ai-server:latest”
+
+Some installations never started or built the optional `local_ai_server` container (for example, if you only use remote providers).
+Older `agent update` versions could still try to recreate `local_ai_server` when Compose files change.
+
+To recover without enabling `local_ai_server`, bring up only the services you actually run:
+
+```bash
+cd /path/to/AVA-AI-Voice-Agent-for-Asterisk
+
+# If the update planned to rebuild admin_ui, recreate it (safe even if not needed):
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate admin_ui
+
+docker compose -p asterisk-ai-voice-agent up -d --remove-orphans --no-build ai_engine admin_ui
+agent check
+```
+
+If you *do* want `local_ai_server`, build it and then re-run compose:
+
+```bash
+cd /path/to/AVA-AI-Voice-Agent-for-Asterisk
+docker compose -p asterisk-ai-voice-agent build local_ai_server
+docker compose -p asterisk-ai-voice-agent up -d --remove-orphans --no-build
+```
+
+### 3) Re-run preflight
+
+```bash
+sudo ./preflight.sh --apply-fixes
+```
+
+Preflight ensures required host directories exist with correct permissions, including:
+- `./data` (Call History SQLite and runtime state)
+- `./models/{stt,tts,llm,kroko}` (mounted into `ai_engine` and `local_ai_server` as `/app/models`)
+- `./asterisk_media/ai-generated` (mounted as `/mnt/asterisk_media/ai-generated` for generated audio)
+
+Preflight also audits Asterisk configuration (when Asterisk is on the same host):
+- Checks ARI enabled, ARI user, HTTP server, dialplan context, and required modules
+- Writes results to `data/asterisk_status.json` — the Admin UI **System → Asterisk** page reads this manifest to display a configuration checklist with guided fix commands
+
+> **Standalone GPU server?** If this machine only runs `local_ai_server` (no Asterisk, no Admin UI), use the `--local-server` flag to skip Asterisk/media checks:
+> ```bash
+> sudo ./preflight.sh --apply-fixes --local-server
+> ```
+> This only runs GPU detection, `.env` seeding, and port 8765 availability checks. See [LOCAL_ONLY_SETUP.md — Topology 3](LOCAL_ONLY_SETUP.md#topology-3-split-server-remote-gpu) for the full split-server guide.
+
+> Note: Admin UI health checks validate the media directory from within the `admin_ui` container.
+> On some systems Asterisk uses a non-default group ID; newer releases auto-detect this at `admin_ui` startup so the UI doesn't incorrectly warn after reboot.
+
+#### Media directory persistence across reboots (important)
+
+Generated audio is written to the host under:
+
+- `./asterisk_media/ai-generated` (host)
+- mounted into containers as `/mnt/asterisk_media/ai-generated`
+
+For **Asterisk file playback** (e.g., `sound:ai-generated/...`) the host Asterisk must be able to read those files under:
+
+- `/var/lib/asterisk/sounds/ai-generated`
+
+Preflight (and `install.sh`) uses the following strategy:
+
+1. **Prefer a symlink**: `/var/lib/asterisk/sounds/ai-generated` → `./asterisk_media/ai-generated` (works when the `asterisk` user can traverse the repo path).
+2. **Fallback to a bind mount** when the repo path is not accessible (common if the project is under `/root` with `0700` permissions):
+   - `/var/lib/asterisk/sounds/ai-generated` is bind-mounted to `./asterisk_media/ai-generated`
+   - The bind mount is **persisted in `/etc/fstab`** (systemd-friendly, best-effort) so it survives host reboots.
+
+Quick verification on the host:
+
+```bash
+ls -la /var/lib/asterisk/sounds/ai-generated
+mountpoint /var/lib/asterisk/sounds/ai-generated || true
+```
+
+If you use **external/shared storage** for media (common on FreePBX), you may have `./asterisk_media` as a symlink to something like `/mnt/asterisk_media`. In that case, you must also ensure the **external mount itself** is persisted across reboots (e.g., via `/etc/fstab` or a systemd mount unit). If the mount doesn’t come up after a reboot, the Admin UI will report a Host Directory error and you should:
+
+```bash
+sudo ./preflight.sh --apply-fixes
+```
+
+Tip: `--persist-media-mount` is available as a troubleshooting/verification helper when bind-mount mode is used:
+
+```bash
+sudo ./preflight.sh --apply-fixes --persist-media-mount
+```
+
+If preflight reports warnings or failures, resolve them first, then re-run preflight until it returns clean:
+- Troubleshooting: `docs/TROUBLESHOOTING_GUIDE.md`
+- Re-run: `sudo ./preflight.sh --apply-fixes`
+- Verify: `agent check`
+
+### 4) Rebuild and recreate containers
+
+The updater normally performs this step. If you are recovering manually:
+
+```bash
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate admin_ui ai_engine
+```
+
+If your configuration requires local inference:
+
+```bash
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate local_ai_server
+```
+
+### 5) Verify the upgrade
+
+```bash
+curl -sS http://localhost:15000/health
+agent check
+
+# If using local AI server (GPU or CPU), also verify STT/LLM/TTS:
+agent check --local
+# Or for a remote GPU server:
+# agent check --remote <gpu-ip>
+```
+
+Then verify in the Admin UI:
+
+1. **Agents** contains all expected migrated agents and exactly one default.
+2. Each Agent's transfer, Google Calendar, Microsoft Calendar, and voicemail access is correct.
+3. **Tools → Save & Apply** increments the tool generation without restarting AI Engine.
+4. A test call reaches the expected Agent, can use an allowed tool, and appears in Call History.
+5. `docker compose -p asterisk-ai-voice-agent logs --since=10m ai_engine admin_ui` has no repeated errors.
+
+### Appendix: Legacy upgrade notes (4.x → 4.6)
+
+- `.env`:
+  - Review ARI settings: `ASTERISK_ARI_PORT`, `ASTERISK_ARI_SCHEME`, `ASTERISK_ARI_SSL_VERIFY`
+  - If using rootless Docker/Podman, set a persistent `DOCKER_SOCK=...` in `.env` (not only `export ...`)
+  - Reference: `docs/ENVIRONMENT_VARIABLES.md`
+- Admin UI “save vs apply”:
+  - `.env` edits from the UI may normalize quoting and remove duplicate keys; this is expected in 4.6+
+- OpenAI Realtime:
+  - Baseline includes a small audio output tweak; validate your call quality if you customized encoding/sample-rate
+
+> ⚠️ **Operator note (production hardening):** `ai_engine` exposes a health/metrics server on port `15000`.
+> In the default compose, it binds to `0.0.0.0` so `admin_ui` can reach it reliably on best-effort hosts.
+> For production, restrict access via firewall/VPN/reverse proxy, or bind it to localhost by setting:
+> - `HEALTH_BIND_HOST=127.0.0.1` in `.env` (then `docker compose -p asterisk-ai-voice-agent up -d --force-recreate ai_engine`)
+> - Optional: set `HEALTH_API_TOKEN` in `.env` if you need authenticated remote access.
+
+### Path A: Admin UI Setup Wizard (Recommended)
+
+**5-minute visual setup** with the new web-based Admin UI:
+
+```bash
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
+cd AVA-AI-Voice-Agent-for-Asterisk
+
+# Run preflight (REQUIRED - creates .env, generates JWT_SECRET)
+sudo ./preflight.sh --apply-fixes
+
+# Start Admin UI first
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate admin_ui
+
+# Complete the Setup Wizard in Admin UI, then start ai_engine
+docker compose -p asterisk-ai-voice-agent up -d --build ai_engine
+```
+
+If you hit permission/container/health issues during setup, start with:
+- `agent check`
+- `sudo ./preflight.sh --apply-fixes`
+- `docs/TROUBLESHOOTING_GUIDE.md`
+
+**Access the Admin UI:**
+- **Local:** `http://localhost:3003`
+- **Remote server:** `http://<server-ip>:3003`
+
+> ⚠️ **Security:** The Admin UI is accessible on the network by default.  
+> **Change the admin password on first login** and restrict port 3003 (firewall/VPN/reverse proxy) for production.
+
+#### Securing the Admin UI
+
+The Admin UI is a privileged control plane — it has root-equivalent access to the host via the Docker socket. See [SECURITY.md "2.1 Admin UI Security"](../SECURITY.md#21-admin-ui-security) for the full threat model, Docker socket hardening options, and an nginx mTLS example.
+
+**Caddy reverse proxy (TLS + basic auth)** — a quick production-grade option.
+
+First make sure the Admin UI is reachable **only** through the proxy — otherwise the
+default `0.0.0.0` bind leaves port 3003 directly exposed, bypassing Caddy's TLS/auth.
+Set `UVICORN_HOST=127.0.0.1` in `.env` (so it binds localhost, matching the
+`reverse_proxy localhost:3003` below), or firewall port 3003 from everything except the
+proxy. Then:
+
+```text
+# /etc/caddy/Caddyfile
+admin.example.com {
+    basicauth {
+        # Generate hash: caddy hash-password --plaintext 'your-password'
+        operator $2a$14$...bcrypt-hash-here...
+    }
+    reverse_proxy localhost:3003
+}
+```
+
+```bash
+# Install Caddy, then:
+sudo caddy reload --config /etc/caddy/Caddyfile
+```
+
+**VPN alternative** — put the host on a WireGuard tunnel (`wg-quick up wg0`) and reach the
+UI only over it. A plain `localhost` bind is *not* reachable from a remote WireGuard peer,
+so do one of: bind the Admin UI to the host's WireGuard interface IP
+(`UVICORN_HOST=<wg-interface-ip>`), run a local reverse proxy listening on that interface,
+or SSH-forward port 3003 over the tunnel. Keep 3003 firewalled on all other interfaces.
+
+The Setup Wizard will:
+1. ✅ Guide you through provider selection (OpenAI, Deepgram, Google, ElevenLabs, Local)
+2. ✅ Validate your API keys with live testing
+3. ✅ Test Asterisk ARI connection
+4. ✅ Configure contexts and greeting
+5. ✅ Start containers automatically
+
+**First login:** retrieve the one-time password from
+`docker compose -p asterisk-ai-voice-agent logs admin_ui | grep -i password`, then change it.
+
+**Best for:** First-time users, production deployments, visual configuration
+
+See [Admin UI Setup Guide](../admin_ui/UI_Setup_Guide.md) for detailed instructions.
+
+---
+
+### Path B: CLI Quickstart (Alternative)
+
+**Command-line wizard** for terminal-based setup:
+
+```bash
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
+cd AVA-AI-Voice-Agent-for-Asterisk
+
+./install.sh
+agent setup
+```
+
+**Best for:** Headless servers, scripted deployments, CLI preference
+
+> Note: `agent quickstart` and `agent init` are still available for backward compatibility, but `agent setup` is the recommended CLI wizard for v6.5.4.
+
+---
+
+### Path C: Manual Setup (Advanced Users)
+
+**Traditional installer** with manual configuration:
+
+```bash
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
+cd AVA-AI-Voice-Agent-for-Asterisk
+./install.sh
+```
+
+The installer will:
+1. Guide you through **3 baseline choices** (a fast-path subset):
+   - **OpenAI Realtime** - Fastest (0.5-1.5s), requires OPENAI_API_KEY
+   - **Deepgram Voice Agent** - Enterprise (1-2s), requires DEEPGRAM_API_KEY + OPENAI_API_KEY
+   - **Local Hybrid** - Privacy-focused (3-7s), requires OPENAI_API_KEY + 8GB RAM
+2. Validate ARI connection with your Asterisk server
+3. Prompt for required API keys
+4. Offer CLI tool installation
+5. Start Docker containers automatically
+
+**Best for:** Advanced users, custom configurations, specific requirements
+
+If you want to use additional providers (e.g., Google Live, ElevenLabs) or switch between multiple golden configs, use the Admin UI Setup Wizard (Path A) or edit `config/ai-agent.yaml` directly.
+
+Notes:
+- The project ships **5 golden baseline configs** under `config/ai-agent.golden-*.yaml`.
+- A **Fully Local** mode is also supported (100% on-premises), but requires stronger hardware for local LLM inference; see `docs/LOCAL_ONLY_SETUP.md` and `docs/HARDWARE_REQUIREMENTS.md`.
+
+**Local note:** This project does **not** bundle models in images. For recommended local build/run profiles (including a smaller `local-core` build), see `docs/LOCAL_PROFILES.md`.
+
+**Kroko note:** `INCLUDE_KROKO_EMBEDDED` is off by default to keep the `local_ai_server` image lighter. Enable it only if you need embedded Kroko (see `docs/LOCAL_PROFILES.md`).
+
+**Container OS note:** `admin_ui` and `ai_engine` ship on Debian `bookworm` (Python `3.11`). `local_ai_server` ships on Debian `trixie` intentionally (for embedded Kroko glibc compatibility).
+
+---
+
+## Detailed Installation
+
+For manual installation, custom configurations, or troubleshooting, continue below.
+
+## 1. Prerequisites
+
+Before you begin, ensure your system meets the following requirements:
+
+- **Operating System**: A modern Linux distribution (e.g., Ubuntu 20.04+, CentOS 7+).
+- **Asterisk**: Version 18 or newer. FreePBX 15+ is also supported.
+- **ARI (Asterisk REST Interface)**: Enabled and configured on your Asterisk server.
+- **Docker**: Latest stable version of Docker and Docker Compose. Podman is community-supported (aliased as `docker`) but not officially tested.
+- **Git**: Required to clone the project repository.
+- **Network Access**: Your server must be able to make outbound connections to the internet for Docker image downloads and API access to AI providers.
+
+### Prerequisite checks
+
+- Verify required Asterisk modules are loaded:
+
+  ```bash
+  asterisk -rx "module show like res_ari_applications"
+  asterisk -rx "module show like app_audiosocket"
+  ```
+
+  Expected example output:
+
+  ```
+  Module                         Description                               Use Count  Status   Support Level
+  res_ari_applications.so        RESTful API module - Stasis application   0          Running  core
+  1 modules loaded
+
+  Module                         Description                               Use Count  Status   Support Level
+  app_audiosocket.so             AudioSocket Application                    20         Running  extended
+  1 modules loaded
+  ```
+
+  If Asterisk < 18, on FreePBX Distro run:
+
+  ```bash
+  asterisk-switch-version   # aka asterisk-version-switch
+  ```
+
+  and select Asterisk 18+.
+
+- Quick install Docker
+  - Ubuntu:
+
+    ```bash
+    curl -fsSL https://get.docker.com | sudo sh
+    sudo usermod -aG docker $USER && newgrp docker
+    docker --version && docker compose version
+    ```
+
+- Debian (11/12):
+
+    ```bash
+    sudo apt-get update
+    sudo apt-get install -y ca-certificates curl gnupg
+
+    sudo install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    sudo apt-get update
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+    sudo usermod -aG docker $USER && newgrp docker
+    docker --version && docker compose version
+    ```
+
+- CentOS/Rocky/Alma:
+
+    ```bash
+    sudo dnf -y install dnf-plugins-core
+    sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    sudo dnf install -y docker-ce docker-ce-cli containerd.io
+    sudo systemctl enable --now docker
+    docker --version && docker compose version
+    ```
+
+### Rootless Docker (best-effort)
+
+If your host uses **rootless Docker**, the Admin UI needs the rootless socket mounted. Set `DOCKER_SOCK` before starting `admin_ui`:
+
+```bash
+export DOCKER_SOCK=/run/user/$(id -u)/docker.sock
+docker compose -p asterisk-ai-voice-agent up -d --build --force-recreate admin_ui
+```
+
+`./preflight.sh` prints the exact command for your system when it detects rootless Docker.
+
+## 2. Installation Steps
+
+The installation is handled by an interactive script that will guide you through the process.
+
+### Step 2.1: Clone the Repository
+
+First, clone the project repository to a directory on your server.
+
+```bash
+git clone https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
+cd AVA-AI-Voice-Agent-for-Asterisk
+```
+
+### Step 2.2: Run the Installation Script
+
+Execute the `install.sh` script. You will need to run it with `sudo` if your user does not have permissions to run Docker.
+
+```bash
+./install.sh
+```
+
+The script will perform the following actions:
+
+1. **System Checks**: Verify that Docker is installed and running.
+2. **Interactive Setup**: Launch a wizard to collect configuration details.
+
+### Step 2.3: Interactive Setup Wizard
+
+The wizard will prompt you for the following information.
+
+#### AI Provider Selection
+
+You will be asked to choose an AI provider.
+
+- **[1] OpenAI Realtime**: Out-of-the-box realtime voice path (cloud).
+- **[2] Deepgram Voice Agent**: Cloud STT/TTS with strong latency/quality.
+- **[3] Local Hybrid**: Local STT/TTS + cloud LLM (audio stays local).
+
+> **GPU users:** If you selected Local Hybrid (or plan to run Fully Local), and you have an NVIDIA GPU, build with the GPU compose overlay for dramatically faster inference (~10-30x). See **[LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md)** for full GPU setup including `docker-compose.gpu.yml`, nvidia-container-toolkit, and split-server topologies.
+
+#### Provider Configuration
+
+Based on your selection, you will need to provide API keys.
+
+- **Deepgram API Key**: Required if you select the Deepgram provider.
+- **OpenAI API Key**: Required if you select any OpenAI-based pipeline.
+
+#### Asterisk ARI Configuration
+
+You will need to provide the connection details for your Asterisk server's ARI.
+
+- **Asterisk Host**: The hostname or IP address of your Asterisk server.
+- **ARI Username**: The username for an ARI user.
+- **ARI Password**: The password for the ARI user.
+
+### What You'll Need (at a glance)
+
+- A Linux server with Docker + Docker Compose
+- Asterisk 18+ or FreePBX 15+ with ARI enabled
+- API keys for your chosen provider (optional): `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`
+
+### Step 2.4: Configuration File Generation
+
+After you complete the wizard, the script will create a `.env` file in the project root with all your settings. You can manually edit this file later if you need to make changes.
+
+### Step 2.5: Start the Service
+
+Once the configuration is complete, the script will prompt you to build and start the Docker container. You can also do this manually.
+
+```bash
+docker compose -p asterisk-ai-voice-agent up --build -d
+```
+
+> IMPORTANT: First startup time (local models)
+>
+> If you selected a Local or Hybrid workflow, the `local_ai_server` may take 15–20 minutes on first startup to load LLM/TTS models depending on your CPU, RAM, and disk speed. This is expected and readiness may show degraded until models have fully loaded. Monitor with:
+>
+> ```bash
+> docker compose -p asterisk-ai-voice-agent logs -f local_ai_server
+> ```
+>
+> Subsequent restarts are typically much faster due to OS page cache. If startup is too slow for your hardware, consider using MEDIUM or LIGHT tier models and update the `.env` model paths accordingly.
+>
+> **GPU acceleration:** Use `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build local_ai_server` for CUDA-accelerated LLM inference. Set `LOCAL_LLM_GPU_LAYERS=-1` in `.env`. See [LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md) for the full guide.
+>
+> **Runtime mode:** `local_ai_server` auto-selects runtime based on GPU availability:
+> - `GPU_AVAILABLE=true` → `full` mode (STT + LLM + TTS preloaded)
+> - `GPU_AVAILABLE=false` → `minimal` mode (STT + TTS only; LLM loaded on demand)
+> Override with `LOCAL_AI_MODE=full` or `LOCAL_AI_MODE=minimal` in `.env`.
+
+## 3. Verifying the Installation
+
+After starting the service, you can check that it is running correctly.
+
+### Check Docker Container Status
+
+```bash
+docker compose -p asterisk-ai-voice-agent ps
+```
+
+You should see the `ai_engine` container running, and `local_ai_server` if your selected configuration requires local STT/LLM/TTS.
+
+## First Successful Call (Canonical Checklist)
+
+This section is designed to remove ambiguity between “containers started” and a **working phone call**.
+
+### 1) Confirm engine health
+
+```bash
+curl http://localhost:15000/health
+```
+
+Expected: `{"status":"healthy"}`
+
+### 2) Confirm ARI connectivity
+
+In `ai_engine` logs, look for indicators that ARI is reachable and authenticated.
+
+```bash
+docker compose -p asterisk-ai-voice-agent logs -f ai_engine
+```
+
+If ARI is not reachable, verify `.env` values and that Asterisk ARI is enabled:
+- `ASTERISK_HOST`
+- `ASTERISK_ARI_USERNAME`
+- `ASTERISK_ARI_PASSWORD`
+
+### 3) Choose transport using the validated compatibility matrix
+
+Transport selection depends on your chosen provider mode and playback method.
+
+Use the validated combinations in:
+- **[Transport & Playback Mode Compatibility Guide](Transport-Mode-Compatibility.md)**
+
+### 4) Configure Asterisk dialplan and reload
+
+Add the minimal Stasis dialplan in **[5. Configure Asterisk Dialplan](#5-configure-asterisk-dialplan)** below, then reload your dialplan:
+
+```bash
+asterisk -rx "dialplan reload"
+```
+
+### 5) Place a test call and verify expected outcomes
+
+Expected outcomes:
+- You hear a greeting.
+- The call appears in **Admin UI → Call History** (if enabled in your config/release).
+- `ai_engine` logs show the call entering Stasis and starting the configured transport.
+
+If you get “greeting only” or “no audio”, jump to:
+- **[Transport Compatibility](Transport-Mode-Compatibility.md)**
+- **[Troubleshooting Guide](TROUBLESHOOTING_GUIDE.md)**
+
+### Check Container Logs
+
+```bash
+docker compose -p asterisk-ai-voice-agent logs -f ai_engine
+```
+
+Look for a message indicating a successful connection to Asterisk ARI and that the engine is ready to start the selected transport.
+
+For transport-specific expectations (AudioSocket vs ExternalMedia RTP), see:
+- **[Transport & Playback Mode Compatibility Guide](Transport-Mode-Compatibility.md)**
+
+### 5. Configure Asterisk Dialplan
+
+The engine uses **ARI-based architecture** - the dialplan just hands calls to Stasis. The engine manages audio transport internally.
+
+**Minimal Dialplan** (works for all supported modes):
+
+Add to `/etc/asterisk/extensions_custom.conf`:
+
+```asterisk
+[from-ai-agent]
+exten => s,1,NoOp(Asterisk AI Voice Agent)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+```
+
+**Optional: Provider Override via Channel Variables**:
+
+```asterisk
+[from-ai-agent-support]
+exten => s,1,NoOp(AI Agent - Customer Support)
+ same => n,Set(AI_PROVIDER=deepgram)
+ same => n,Set(AI_AGENT=support)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+[from-ai-agent-openai]
+exten => s,1,NoOp(AI Agent - OpenAI Realtime)
+ same => n,Set(AI_PROVIDER=openai_realtime)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+```
+
+**Important:** Do NOT use `AudioSocket()` in the dialplan. The engine originates AudioSocket channels via ARI automatically.
+
+**How It Works:**
+1. Call enters `Stasis(asterisk-ai-voice-agent)`
+2. Engine receives StasisStart event via ARI
+3. Engine starts the configured transport and playback mode for that call
+4. Engine bridges the transport channel with the caller
+5. Two-way audio flows automatically
+
+For validated transport/playback combinations, see:
+- **[Transport & Playback Mode Compatibility Guide](Transport-Mode-Compatibility.md)**
+
+After adding the dialplan, reload Asterisk configuration:
+
+```bash
+asterisk -rx "dialplan reload"
+```
+
+## 4. Troubleshooting
+
+- **Cannot connect to ARI**:
+  - Verify that your Asterisk `host`, `username`, and `password` are correct in the `.env` file.
+  - Ensure that the ARI port (usually 8088) is accessible from the Docker container.
+  - Check your `ari.conf` and `http.conf` in Asterisk.
+- **AI does not respond**:
+  - Check that your API keys in the `.env` file are correct.
+- **Audio Quality Issues**:
+  - Confirm AudioSocket is connected (see Asterisk CLI and `ai_engine` logs).
+  - Use a tmpfs/SSD for the media volume (default: `./asterisk_media` on host, mounted as `/mnt/asterisk_media` in `ai_engine`) to minimize I/O latency for file-based playback.
+  - Verify you are not appending file extensions to ARI `sound:` URIs (Asterisk will add them automatically).
+
+- **No host Python 3 installed (scripts/Makefile)**:
+  - The Makefile auto-falls back to running helper scripts inside the `ai_engine` container. You'll see a hint when it does.
+  - Check your environment:
+
+        ```bash
+        make check-python
+        ```
+
+  - Run helpers directly in the container if desired:
+
+        ```bash
+        docker compose -p asterisk-ai-voice-agent exec -T ai_engine python /app/scripts/validate_externalmedia_config.py
+        docker compose -p asterisk-ai-voice-agent exec -T ai_engine python /app/scripts/test_externalmedia_call.py
+        docker compose -p asterisk-ai-voice-agent exec -T ai_engine python /app/scripts/monitor_externalmedia.py
+        docker compose -p asterisk-ai-voice-agent exec -T ai_engine python /app/scripts/capture_test_logs.py --duration 40
+        docker compose -p asterisk-ai-voice-agent exec -T ai_engine python /app/scripts/analyze_logs.py /app/logs/latest.json
+        ```
+
+- **Container crashes with NumPy X86_V2 CPU error**:
+
+  If containers fail to start with an error like:
+
+  ```text
+  RuntimeError: NumPy was built with baseline optimizations:
+  (X86_V2) but your machine doesn't support:
+  (X86_V2).
+  ```
+
+  This means your CPU lacks SSE4.1/SSE4.2 instructions required by NumPy 2.x. This commonly occurs on:
+  - Older KVM/QEMU virtual machines with "Common KVM processor"
+  - Pre-2013 physical CPUs
+  - Some cloud VPS instances with legacy CPU emulation
+
+  **Fix**: Pin NumPy to version 1.x (compatible with older CPUs):
+
+  ```bash
+  cd /path/to/AVA-AI-Voice-Agent-for-Asterisk
+
+  # Fix ai_engine requirements
+  sed -i 's/numpy>=1.24.0/numpy>=1.24.0,<2.0/g' requirements.txt
+
+  # Fix admin_ui requirements
+  sed -i 's/numpy>=1.24.0/numpy>=1.24.0,<2.0/g' admin_ui/backend/requirements.txt
+
+  # Rebuild containers with --no-cache to force fresh install
+  docker compose -p asterisk-ai-voice-agent build --no-cache ai_engine admin_ui
+
+  # Recreate containers
+  docker compose -p asterisk-ai-voice-agent up -d --force-recreate ai_engine admin_ui
+  ```
+
+  **Verify your CPU supports X86_V2** (optional diagnostic):
+
+  ```bash
+  grep -E 'sse4_1|sse4_2' /proc/cpuinfo
+  ```
+
+  If no output, your CPU lacks the required instructions and the fix above is needed.
+
+For more advanced troubleshooting, refer to the project's main `README.md` or open an issue in the repository.

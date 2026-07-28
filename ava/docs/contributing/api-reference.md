@@ -1,0 +1,349 @@
+# API Reference
+
+Asterisk AI Voice Agent exposes two HTTP API services:
+
+1. **Admin UI Backend** (FastAPI, port 3003) — Configuration, system management, call history
+2. **AI Engine Health Server** (aiohttp, port 15000) — Health probes, metrics, runtime status
+
+---
+
+## Interactive API Documentation
+
+The Admin UI Backend provides **OpenAPI 3.0** documentation via Swagger UI and ReDoc.
+
+| URL | Description |
+|-----|-------------|
+| `http://<host>:3003/docs` | **Swagger UI** — Interactive API explorer with "Try it out" |
+| `http://<host>:3003/redoc` | **ReDoc** — Clean, readable API reference |
+| `http://<host>:3003/openapi.json` | **OpenAPI spec** — Import into Postman, Insomnia, or SDK generators |
+
+### Disabling API Docs in Production
+
+For security-hardened deployments, you can disable API documentation endpoints by setting:
+
+```bash
+# In .env file
+ENABLE_API_DOCS=false
+```
+
+When disabled, `/docs`, `/redoc`, and `/openapi.json` will return 404. Default is `true` (enabled).
+
+### Authentication
+
+Most Admin UI endpoints require JWT authentication:
+
+> **v7.0.0 and newer:** the default `admin/admin` login is removed. On first start, a one-time admin password is printed to the `admin_ui` container logs and must be changed at first login.
+
+```bash
+# 1. Retrieve the first-run password
+docker compose -p asterisk-ai-voice-agent logs admin_ui | grep -i password
+
+# 2. Login to get a token
+curl -X POST http://localhost:3003/api/auth/login \
+  -d "username=admin&password=<one-time-password>"
+
+# Response: {"access_token": "eyJ...", "token_type": "bearer"}
+
+# 3. Use the token in subsequent requests
+curl -H "Authorization: Bearer eyJ..." \
+  http://localhost:3003/api/config/yaml
+```
+
+---
+
+## Admin UI Backend Endpoints (Port 3003)
+
+### Auth (`/api/auth`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/auth/login` | Obtain JWT access token |
+| POST | `/api/auth/change-password` | Change current user's password |
+| GET | `/api/auth/me` | Get current user info |
+
+### Config (`/api/config`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/config/yaml` | Get merged YAML configuration |
+| POST | `/api/config/yaml` | Update YAML configuration |
+| GET | `/api/config/env` | Get environment variables |
+| POST | `/api/config/env` | Update environment variables |
+| GET | `/api/config/env/status` | Check if containers are out-of-sync with .env |
+| POST | `/api/config/providers/test` | Test provider connection |
+| GET | `/api/config/export` | Export configuration as ZIP |
+| POST | `/api/config/import` | Import configuration from ZIP |
+| POST | `/api/config/env/smtp/test` | Test SMTP settings |
+| GET | `/api/config/export-logs` | Export logs for troubleshooting |
+| GET | `/api/config/options/{provider_type}` | Get provider options (models, voices) |
+
+### System (`/api/system`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/system/containers` | List Docker containers |
+| POST | `/api/system/containers/{id}/start` | Start a container |
+| POST | `/api/system/containers/{id}/restart` | Restart a container |
+| POST | `/api/system/containers/ai_engine/reload` | Hot-reload AI Engine config |
+| GET | `/api/system/metrics` | Get system metrics (CPU, RAM) |
+| GET | `/api/system/health` | Aggregate health status |
+| GET | `/api/system/sessions` | Get active call sessions |
+| GET | `/api/system/directories` | Check directory health |
+| POST | `/api/system/directories/fix` | Fix directory permissions |
+| GET | `/api/system/docker/disk-usage` | Get Docker disk usage |
+| POST | `/api/system/docker/prune` | Clean up Docker resources |
+| GET | `/api/system/platform` | Get platform detection results |
+| POST | `/api/system/preflight` | Run preflight checks |
+| POST | `/api/system/test-ari` | Test Asterisk ARI connection |
+| GET | `/api/system/ari/extension-status` | Get extension status via ARI |
+| GET | `/api/system/updates/status` | Get update status |
+| GET | `/api/system/updates/branches` | List available branches |
+| GET | `/api/system/updates/plan` | Get update plan |
+| POST | `/api/system/updates/run` | Run update |
+| POST | `/api/system/updates/rollback` | Rollback to previous version |
+| GET | `/api/system/updates/history` | Get update history |
+| GET | `/api/system/updates/jobs/{job_id}` | Get update job details |
+| GET | `/api/system/asterisk-status` | Get Asterisk config status |
+
+### Calls (`/api/calls`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/calls` | List call records with filters |
+| GET | `/api/calls/stats` | Get call statistics |
+| GET | `/api/calls/filters` | Get filter options (providers, contexts, outcomes) |
+| GET | `/api/calls/{record_id}` | Get single call record |
+| GET | `/api/calls/{record_id}/transcript` | Get call transcript |
+| DELETE | `/api/calls/{record_id}` | Delete a call record |
+| DELETE | `/api/calls` | Bulk delete calls |
+| GET | `/api/calls/export/csv` | Export calls as CSV |
+| GET | `/api/calls/export/json` | Export calls as JSON |
+
+> **Agent on a call record (v7).** Each call record reports the resolved agent as
+> `context_name` (the agent/context slug) plus `routing_method`
+> (`ai_agent` \| `ai_context` \| `default` \| `null`). v7.0.x adds two **additive**
+> aliases so integrations need not infer this: `agent_slug` and `agent_name`.
+> `agent_slug` mirrors the resolved agent (`context_name`) **whenever the call was
+> routed to one** — `ai_agent`, `ai_context` or `default` routing — and is `null`
+> only for `unknown`/`null` routing. `routing_method` still tells you *how* the agent
+> was selected. `agent_name` is a best-effort display-name lookup and is `null` when
+> the agents database is unavailable or has no matching agent. `context_name` and
+> `routing_method` are unchanged.
+
+### Agents (`/api/agents`)
+The Agents system (v7) is the operator surface for managing AI agents. Manage agents
+over HTTP here; see also [`docs/AGENTS.md`](../AGENTS.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/agents` | List all agents |
+| GET | `/api/agents/{slug}` | Get a single agent by slug |
+| POST | `/api/agents` | Create an agent (requires a provider **or** a pipeline) |
+| PATCH | `/api/agents/{slug}` | Update an agent (partial; `is_active` can promote default) |
+| DELETE | `/api/agents/{slug}` | Delete an agent (promotes a new default if needed) |
+| POST | `/api/agents/{slug}/default` | Make this agent the default |
+| GET | `/api/agents/{slug}/stats` | Per-agent stats (calls in last 30d, last call) |
+| GET | `/api/agents/{slug}/dialplan` | Generate an `extensions_custom.conf` snippet |
+| GET | `/api/agents/templates` | List starter agent templates |
+| GET | `/api/agents/summary` | Dashboard KPIs (active agents, active calls, routed, transfers) |
+| GET | `/api/agents/stats-batch` | Per-agent stats for all agents in one response |
+| GET | `/api/agents/distribution` | Call counts grouped by agent, descending |
+| GET | `/api/agents/routing-methods` | Routing-method breakdown (`ai_agent`/`ai_context`/`default`/`unknown`) |
+| GET | `/api/agents-migration/status` | YAML→DB migration result and drift state |
+| POST | `/api/agents-migration/reconcile` | Re-import YAML context changes into the DB |
+| POST | `/api/agents-migration/acknowledge` | Keep the DB as-is and clear the drift flag |
+
+> **`AI_AGENT` is a dialplan/runtime channel variable, not an HTTP parameter.** Set
+> `AI_AGENT=<slug>` (or the legacy `AI_CONTEXT=<slug>`) in your Asterisk dialplan to
+> route a call to a specific agent — see `GET /api/agents/{slug}/dialplan` for a
+> ready-to-paste snippet. External integrations should manage agents via the Agents
+> API above and read the agent that handled a call from the call-record fields
+> (`context_name` / `agent_slug` / `agent_name` / `routing_method`).
+
+### Tools (`/api/tools`)
+The Tools system (v7) is the operator surface for managing the agent's tools &
+capabilities. **Managed HTTP tools** are the operator-built HTTP/webhook
+integrations (pre-call lookups, in-call tools, post-call webhooks). **Built-in
+tools** are the engine-registered telephony/business tools (transfer, hangup,
+voicemail, email, calendars). **Settings** covers tools-block options that are
+not individual tools.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/tools/catalog` | Read-only catalog of all available tools (built-in, HTTP, MCP) |
+| POST | `/api/tools/test-http` | Test an HTTP tool configuration without saving it |
+| GET | `/api/tools/test-values` | Get default values used by the HTTP-tool tester |
+| GET | `/api/tools/email-templates/defaults` | Get email-template defaults |
+| POST | `/api/tools/email-templates/preview` | Preview an email template |
+| GET | `/api/tools/managed` | List operator-managed HTTP tools |
+| POST | `/api/tools/managed` | Create a managed HTTP tool (`kind` derived from `phase`) |
+| GET | `/api/tools/managed/{name}` | Get a single managed HTTP tool |
+| PUT | `/api/tools/managed/{name}` | Replace a managed HTTP tool (may move it between phases) |
+| PATCH | `/api/tools/managed/{name}` | Partially update a managed HTTP tool |
+| DELETE | `/api/tools/managed/{name}` | Delete a managed HTTP tool |
+| GET | `/api/tools/builtin` | List built-in tools with enabled state and config |
+| GET | `/api/tools/builtin/{name}` | Get a single built-in tool's config |
+| PATCH | `/api/tools/builtin/{name}` | Partially update a built-in tool (deep merge; `null` removes a key) |
+| PUT | `/api/tools/builtin/{name}` | Replace a built-in tool's config |
+| GET | `/api/tools/settings` | Read tools-block settings (`farewell_hangup_delay_sec`, extensions, …) |
+| PATCH | `/api/tools/settings` | Update tools-block settings |
+
+> **`phase` → `kind` is enforced.** A managed tool's `kind` is derived from its
+> `phase` (`pre_call` → `generic_http_lookup`, `in_call` → `in_call_http_lookup`,
+> `post_call` → `generic_webhook`); a mismatched `kind` is rejected with `422`.
+> Managed tool names may not collide with built-in tool names.
+
+Managed tool URLs must be absolute HTTP(S) URLs or start with an environment
+placeholder such as `${CRM_BASE_URL}`. Timeouts must be between 1 and 300,000 ms,
+and methods are limited to standard HTTP methods. Explicit `null` is rejected for
+required PATCH fields; it removes supported optional fields.
+
+Built-ins include transfer, attended/cancel transfer, hangup, voicemail,
+`check_extension_status`, email/transcript, and Google/Microsoft calendar tools.
+The settings endpoint rejects built-in, managed, MCP, identity, and other
+registry-reserved tool names. `farewell_hangup_delay_sec` must be finite and
+between 0 and 300 seconds.
+
+Mutating endpoints persist the local configuration override but do not restart
+the AI Engine. Apply tool changes using the AI Engine restart endpoint after the
+write succeeds.
+
+### Outbound (`/api/outbound`, `/api/campaigns`, `/api/leads`, `/api/recordings`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/recordings` | List recordings |
+| POST | `/api/recordings/upload` | Upload a recording |
+| GET | `/api/recordings/preview.wav` | Preview recording as WAV |
+| GET | `/api/meta` | Get outbound metadata |
+| GET | `/api/sample.csv` | Download sample CSV |
+| GET | `/api/campaigns` | List campaigns |
+| POST | `/api/campaigns` | Create campaign |
+| GET | `/api/campaigns/{id}` | Get campaign |
+| PATCH | `/api/campaigns/{id}` | Update campaign |
+| DELETE | `/api/campaigns/{id}` | Delete campaign |
+| POST | `/api/campaigns/{id}/clone` | Clone campaign |
+| POST | `/api/campaigns/{id}/archive` | Archive campaign |
+| POST | `/api/campaigns/{id}/status` | Set campaign status |
+| GET | `/api/campaigns/{id}/stats` | Get campaign stats |
+| POST | `/api/campaigns/{id}/leads/import` | Import leads from CSV |
+| GET | `/api/campaigns/{id}/leads` | List leads |
+| GET | `/api/campaigns/{id}/attempts` | List call attempts |
+| POST | `/api/leads/{id}/cancel` | Cancel a lead |
+| POST | `/api/leads/{id}/ignore` | Ignore a lead |
+| POST | `/api/leads/{id}/recycle` | Recycle a lead |
+| DELETE | `/api/leads/{id}` | Delete a lead |
+
+### Local AI (`/api/local-ai`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/local-ai/models` | List installed models |
+| GET | `/api/local-ai/capabilities` | Get backend capabilities |
+| GET | `/api/local-ai/status` | Get local AI status |
+| POST | `/api/local-ai/switch` | Switch active model |
+| DELETE | `/api/local-ai/models` | Delete a model |
+| POST | `/api/local-ai/rebuild` | Rebuild local AI container |
+| GET | `/api/local-ai/backends` | List available backends |
+| GET | `/api/local-ai/backends/{type}/{name}/schema` | Get backend config schema |
+
+### MCP (`/api/mcp`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/mcp/status` | Get MCP server status (proxied from AI Engine) |
+| POST | `/api/mcp/servers/{server_id}/test` | Test MCP server connection |
+
+### Logs (`/api/logs`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/logs/{container_name}` | Get container logs |
+| GET | `/api/logs/{container_name}/events` | Get structured log events |
+
+### Wizard (`/api/wizard`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/wizard/init-env` | Initialize .env file |
+| GET | `/api/wizard/load-config` | Load existing configuration |
+| GET | `/api/wizard/status` | Get setup status |
+| POST | `/api/wizard/save` | Save wizard configuration |
+| POST | `/api/wizard/skip` | Skip setup wizard |
+| POST | `/api/wizard/validate-key` | Validate API key |
+| POST | `/api/wizard/validate-connection` | Validate Asterisk connection |
+| GET | `/api/wizard/engine-status` | Get AI Engine status |
+| POST | `/api/wizard/setup-media-paths` | Setup media directories |
+| POST | `/api/wizard/start-engine` | Start AI Engine |
+
+### Ollama (`/api/ollama`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/ollama/test` | Test Ollama connection |
+| GET | `/api/ollama/models` | List Ollama models |
+| GET | `/api/ollama/tool-capable-models` | Get tool-capable models |
+
+### Documentation (`/api/docs`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/docs/categories` | Get documentation categories |
+| GET | `/api/docs/content/{file_path}` | Get documentation content |
+| GET | `/api/docs/search` | Search documentation |
+
+---
+
+## AI Engine Health Server (Port 15000)
+
+The AI Engine exposes a lightweight aiohttp server for health probes and metrics.
+Default bind: `127.0.0.1:15000` (configurable via `HEALTH_BIND_HOST`, `HEALTH_BIND_PORT`).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/live` | Kubernetes liveness probe (always returns 200) |
+| GET | `/ready` | Kubernetes readiness probe |
+| GET | `/health` | Detailed health status JSON |
+| GET | `/metrics` | Prometheus metrics |
+| POST | `/reload` | Hot-reload YAML configuration |
+| GET | `/mcp/status` | MCP server status |
+| POST | `/mcp/test/{server_id}` | Test MCP server connection |
+| GET | `/tools/definitions` | Get tool catalog (read-only) |
+| GET | `/sessions/stats` | Get active session statistics |
+
+### Example: Health Check
+
+```bash
+curl http://localhost:15000/health
+```
+
+```json
+{
+  "status": "healthy",
+  "uptime_seconds": 3600,
+  "active_calls": 2,
+  "provider": "openai_realtime",
+  "transport": "external_media"
+}
+```
+
+### Example: Prometheus Metrics
+
+```bash
+curl http://localhost:15000/metrics
+```
+
+```text
+# HELP aava_active_calls Number of active calls
+# TYPE aava_active_calls gauge
+aava_active_calls 2
+# HELP aava_total_calls_handled Total calls handled since startup
+# TYPE aava_total_calls_handled counter
+aava_total_calls_handled 150
+```
+
+### Authentication (Optional)
+
+Set `HEALTH_API_TOKEN` in `.env` to require bearer token authentication:
+
+```bash
+curl -H "Authorization: Bearer your-token" http://localhost:15000/reload -X POST
+```
+
+---
+
+## Related Documentation
+
+- Architecture overview: [`architecture-quickstart.md`](architecture-quickstart.md)
+- Architecture deep dive: [`architecture-deep-dive.md`](architecture-deep-dive.md)
+- Engine source: [`src/engine.py`](../../src/engine.py)
+- Configuration: [`src/config.py`](../../src/config.py)
