@@ -28,9 +28,19 @@ USING_PLACEHOLDER_SECRET = SECRET_KEY in PLACEHOLDER_SECRETS
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
+# LOCAL-DEV ESCAPE HATCH — ADMIN_UI_DISABLE_AUTH=1 serves every request as `admin` with no token.
+#
+# DANGER: this container mounts the Docker socket and the project root, which docker-compose.yml
+# documents as "root-equivalent access to the host". With auth off, anyone who can reach port 3003
+# has that access — and uvicorn binds 0.0.0.0 by default. Only ever set this on a workstation that
+# is not reachable from an untrusted network. Never on the on-prem Asterisk box.
+DISABLE_AUTH = os.getenv("ADMIN_UI_DISABLE_AUTH", "").strip().lower() in {"1", "true", "yes"}
+
 # Password hashing
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+# auto_error=False when disabled, so a missing Authorization header reaches get_current_user as
+# None instead of being turned into a 401 by the security dependency itself.
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=not DISABLE_AUTH)
 
 router = APIRouter()
 
@@ -191,7 +201,11 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)):
+async def get_current_user(request: Request, token: Optional[str] = Depends(oauth2_scheme)):
+    # must_change_password=False so the mandatory change-password modal stays out of the way too.
+    if DISABLE_AUTH:
+        return User(username="admin", disabled=False, must_change_password=False)
+
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",

@@ -46,23 +46,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     useEffect(() => {
-        if (token) {
-            // Verify token and get user info
-            axios.get('/api/auth/me', {
-                headers: { Authorization: `Bearer ${token}` }
+        // Always probe /api/auth/me, even with no token. When the backend runs with
+        // ADMIN_UI_DISABLE_AUTH=1 it answers unauthenticated, so the UI comes straight up signed
+        // in and the login page is never reached. With auth enabled and no token it 401s and we
+        // fall through to the redirect exactly as before — so this is safe either way.
+        axios.get('/api/auth/me', token ? { headers: { Authorization: `Bearer ${token}` } } : {})
+            .then(response => {
+                setUser(response.data);
+                setMustChangePassword(response.data.must_change_password || false);
+                setLoading(false);
             })
-                .then(response => {
-                    setUser(response.data);
-                    setMustChangePassword(response.data.must_change_password || false);
-                    setLoading(false);
-                })
-                .catch(() => {
-                    logout();
-                    setLoading(false);
-                });
-        } else {
-            setLoading(false);
-        }
+            .catch(() => {
+                if (token) logout();  // only clear state we actually had
+                setLoading(false);
+            });
     }, [token]);
 
     const login = async (username: string, password: string) => {
